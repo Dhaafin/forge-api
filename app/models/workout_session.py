@@ -12,4 +12,4 @@ class WorkoutSession(Base):
     title = Column(String, nullable=True)
     start_time = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
     end_time = Column(DateTime, nullable=True)
-    duration_minutes = Column(DateTime, nullable=True)
+    duration_minutes = Column(Integer, nullable=True)
