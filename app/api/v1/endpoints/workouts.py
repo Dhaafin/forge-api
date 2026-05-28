@@ -1,7 +1,7 @@
 # app/api/v1/endpoints/workouts.py
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 from pydantic import BaseModel
 
@@ -20,12 +20,46 @@ router = APIRouter()
 # =====================================================================
 
 @router.get("/exercises", response_model=List[ExerciseResponse])
-def get_all_exercises(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def get_all_exercises(
+    search: Optional[str] = Query(None, description="Search by exercise name or target muscle"),
+    sort_by: str = Query("name", description="Field to sort by (name, target_muscle)"),
+    order: str = Query("asc", description="Sort direction (asc, desc)"),
+    limit: Optional[int] = Query(20, ge=1, le=100, description="Limit pagination"),
+    offset: Optional[int] = Query(0, ge=0, description="Offset pagination"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """
     Fetch the complete library of gym exercises available for the mobile workout tracker.
     Includes both default seeded exercises and custom user creations.
     """
-    return db.query(Exercise).all()
+    query = db.query(Exercise)
+
+    if search:
+        search_term = f"%{search}%"
+        query = query.filter(
+            (Exercise.name.ilike(search_term)) | 
+            (Exercise.target_muscle.ilike(search_term))
+        )
+
+    # Sort validation/mapping
+    whitelisted_fields = {
+        "name": Exercise.name,
+        "target_muscle": Exercise.target_muscle
+    }
+    sort_column = whitelisted_fields.get(sort_by, Exercise.name)
+
+    if order.lower() == "desc":
+        query = query.order_by(sort_column.desc())
+    else:
+        query = query.order_by(sort_column.asc())
+
+    if limit is not None:
+        query = query.limit(limit)
+    if offset is not None:
+        query = query.offset(offset)
+
+    return query.all()
 
 @router.post("/exercises", response_model=ExerciseResponse, status_code=status.HTTP_201_CREATED)
 def create_new_exercise(obj_in: ExerciseCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
