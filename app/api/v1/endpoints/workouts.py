@@ -64,6 +64,27 @@ def update_workout_set_detail(
     db.refresh(db_set)
     return db_set
 
+@router.delete("/set/{set_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_single_workout_set(
+    set_id: str, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    """
+    [M6 Backend] Permanently delete a single set row from a workout log session.
+    """
+    db_set = db.query(WorkoutSet).\
+        join(WorkoutSession).\
+        filter(WorkoutSet.id == set_id, WorkoutSession.user_id == current_user.id).\
+        first()
+        
+    if not db_set:
+        raise HTTPException(status_code=404, detail="Baris set tidak ditemukan atau bukan milikmu.")
+        
+    db.delete(db_set)
+    db.commit()
+    return None
+
 @router.delete("/session/{session_id}", status_code=200)
 def delete_workout_session(
     session_id: int, 
