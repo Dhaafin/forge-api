@@ -1,9 +1,9 @@
 # app/api/v1/endpoints/workouts.py
-from datetime import datetime
-from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from typing import List
+from datetime import datetime
+from pydantic import BaseModel
 
 from app.core.database import get_db
 from app.api.deps import get_current_user
@@ -11,28 +11,204 @@ from app.models.user import User
 from app.models.exercise import Exercise
 from app.models.workout_session import WorkoutSession
 from app.models.workout_set import WorkoutSet
-from app.schemas.workout import WorkoutSessionCreate, WorkoutSessionResponse, ExerciseResponse, WorkoutSetResponse
+from app.schemas.workout import WorkoutSessionCreate, WorkoutSessionResponse, ExerciseResponse, ExerciseCreate, WorkoutSetResponse
 
 router = APIRouter()
 
+# =====================================================================
+# 📑 EXERCISE MANAGEMENT AREA (GLOBALLY AVAILABLE + USER CUSTOM)
+# =====================================================================
+
 @router.get("/exercises", response_model=List[ExerciseResponse])
-def get_exercise_library(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def get_all_exercises(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
-    Fetch the list of all available structural exercises for the exercise picker menu.
+    Fetch the complete library of gym exercises available for the mobile workout tracker.
+    Includes both default seeded exercises and custom user creations.
     """
-    return db.query(Exercise).order_by(Exercise.target_muscle).all()
+    return db.query(Exercise).all()
+
+@router.post("/exercises", response_model=ExerciseResponse, status_code=status.HTTP_201_CREATED)
+def create_new_exercise(obj_in: ExerciseCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """
+    Allow users to dynamically add new exercise variants to the global library database.
+    """
+    existing_ex = db.query(Exercise).filter(Exercise.name == obj_in.name).first()
+    if existing_ex:
+        raise HTTPException(status_code=400, detail="An exercise with this exact name already exists.")
+        
+    db_exercise = Exercise(name=obj_in.name, target_muscle=obj_in.target_muscle)
+    db.add(db_exercise)
+    db.commit()
+    db.refresh(db_exercise)
+    return db_exercise
+
+@router.put("/exercises/{exercise_id}", response_model=ExerciseResponse)
+def update_exercise_metadata(exercise_id: str, name: str, target_muscle: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """
+    Modify metadata specifications (name or target muscle) of a specific gym movement entry.
+    """
+    db_exercise = db.query(Exercise).filter(Exercise.id == exercise_id).first()
+    if not db_exercise:
+        raise HTTPException(status_code=404, detail="Exercise profile not found.")
+        
+    db_exercise.name = name
+    db_exercise.target_muscle = target_muscle
+    db.commit()
+    db.refresh(db_exercise)
+    return db_exercise
+
+@router.delete("/exercises/{exercise_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_exercise_record(exercise_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """
+    Safely remove an exercise option. Protected by Restrict Constraint to prevent breaking historical workout logs.
+    """
+    db_exercise = db.query(Exercise).filter(Exercise.id == exercise_id).first()
+    if not db_exercise:
+        raise HTTPException(status_code=404, detail="Exercise profile not found.")
+        
+    # INTEGRITY PROTECTION: Check if this exercise ID is already tied to past workout sets
+    is_used = db.query(WorkoutSet).filter(WorkoutSet.exercise_id == exercise_id).first()
+    if is_used:
+        raise HTTPException(
+            status_code=400, 
+            detail="Cannot delete this exercise. It is already linked to historical workout sets. Remove the sets first."
+        )
+        
+    db.delete(db_exercise)
+    db.commit()
+    return None
+
+# =====================================================================
+# 🏋️‍♂️ WORKOUT SESSION REGISTRATION & PR ENGINE
+# =====================================================================
+
+@router.get("/session/history", response_model=List[WorkoutSessionResponse])
+def get_workout_history(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """
+    Retrieve all historical training logs belonging exclusively to the authenticated user.
+    Ordered chronologically by the most recent session.
+    """
+    return db.query(WorkoutSession).\
+        filter(WorkoutSession.user_id == current_user.id).\
+        order_by(WorkoutSession.start_time.desc()).all()
+
+@router.post("/session", response_model=WorkoutSessionResponse, status_code=status.HTTP_201_CREATED)
+def record_workout_session(obj_in: WorkoutSessionCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """
+    Commit a new active training log. Auto-evaluates historical sets to flag Personal Records (PR)
+    and processes progressive overload analytics in the background.
+    """
+    # 1. Initialize the parent session entity
+    db_session = WorkoutSession(
+        user_id=current_user.id,
+        title=obj_in.title,
+        start_time=datetime.utcnow(),
+        end_time=datetime.utcnow(),
+        duration_minutes=obj_in.duration_minutes
+    )
+    db.add(db_session)
+    db.commit()
+    db.refresh(db_session)
+
+    # 2. Iterate through incoming sets and evaluate Personal Records (PR)
+    for s in obj_in.sets:
+        highest_past_weight = db.query(WorkoutSet.weight_kg).\
+            join(WorkoutSession).\
+            filter(WorkoutSession.user_id == current_user.id).\
+            filter(WorkoutSet.exercise_id == s.exercise_id).\
+            filter(WorkoutSession.id != db_session.id).\
+            order_by(WorkoutSet.weight_kg.desc()).\
+            first()
+
+        is_new_pr = False
+        if highest_past_weight is None or s.weight_kg > highest_past_weight[0]:
+            is_new_pr = True
+
+        db_set = WorkoutSet(
+            session_id=db_session.id,
+            exercise_id=s.exercise_id,
+            set_number=s.set_number,
+            weight_kg=s.weight_kg,
+            reps=s.reps,
+            set_type=s.set_type,
+            is_pr=is_new_pr
+        )
+        db.add(db_set)
+
+    db.commit()
+    db.refresh(db_session)
+
+    # 3. BACKGROUND AI: Granular Progressive Overload Detector (M5)
+    try:
+        current_volumes = {}
+        for s in db.query(WorkoutSet).filter(WorkoutSet.session_id == db_session.id).all():
+            if s.exercise_id not in current_volumes:
+                current_volumes[s.exercise_id] = 0
+            current_volumes[s.exercise_id] += (s.weight_kg * s.reps)
+
+        for exercise_id, current_vol in current_volumes.items():
+            last_past_set = db.query(WorkoutSet).\
+                join(WorkoutSession, WorkoutSet.session_id == WorkoutSession.id).\
+                filter(WorkoutSession.user_id == current_user.id).\
+                filter(WorkoutSession.id != db_session.id).\
+                filter(WorkoutSet.exercise_id == exercise_id).\
+                order_by(WorkoutSession.start_time.desc()).\
+                first()
+
+            if last_past_set:
+                past_sets = db.query(WorkoutSet).\
+                    filter(WorkoutSet.session_id == last_past_set.session_id).\
+                    filter(WorkoutSet.exercise_id == exercise_id).all()
+                past_vol = sum([s.weight_kg * s.reps for s in past_sets])
+
+                if current_vol > past_vol:
+                    print(f"🔥 OVERLOAD DETECTED: Volume increased for exercise ID {exercise_id} ({current_vol}kg vs {past_vol}kg)")
+    except Exception as e:
+        print(f"⚠️ Analytics Engine Error: {str(e)}")
+
+    return db_session
+
+@router.put("/session/{session_id}", response_model=WorkoutSessionResponse)
+def update_workout_session(session_id: str, title: str = None, duration_minutes: int = None, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """
+    Allow dynamic updates to session titles or training length logs from the mobile screen.
+    """
+    db_session = db.query(WorkoutSession).filter(WorkoutSession.id == session_id, WorkoutSession.user_id == current_user.id).first()
+    if not db_session:
+        raise HTTPException(status_code=404, detail="Workout log entry not found.")
+        
+    if title is not None:
+        db_session.title = title
+    if duration_minutes is not None:
+        db_session.duration_minutes = duration_minutes
+        
+    db.commit()
+    db.refresh(db_session)
+    return db_session
+
+@router.delete("/session/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_workout_session(session_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """
+    Cascade-delete an entire faulty log entry along with its child performance metrics parameters.
+    """
+    db_session = db.query(WorkoutSession).filter(WorkoutSession.id == session_id, WorkoutSession.user_id == current_user.id).first()
+    if not db_session:
+        raise HTTPException(status_code=404, detail="Workout log entry not found.")
+        
+    db.query(WorkoutSet).filter(WorkoutSet.session_id == session_id).delete()
+    db.delete(db_session)
+    db.commit()
+    return None
+
+# =====================================================================
+# ⚙️ SUB-CRUD: INDIVIDUAL SET MANIPULATION
+# =====================================================================
 
 @router.put("/set/{set_id}", response_model=WorkoutSetResponse)
-def update_workout_set_detail(
-    set_id: str, 
-    weight_kg: float = None, 
-    reps: int = None, 
-    set_type: str = None,
-    db: Session = Depends(get_db), 
-    current_user: User = Depends(get_current_user)
-):
+def update_workout_set_detail(set_id: str, weight_kg: float = None, reps: int = None, set_type: str = None, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
-    [M6 Backend] Edit specific metrics (weight, reps, type) of an individual workout set row.
+    Modify specific metrics (weight, reps, type) of an individual workout set row.
+    Automatically recalculates the Personal Record (PR) flag if weight changes.
     """
     db_set = db.query(WorkoutSet).\
         join(WorkoutSession).\
@@ -40,7 +216,7 @@ def update_workout_set_detail(
         first()
         
     if not db_set:
-        raise HTTPException(status_code=404, detail="Baris set latihan tidak ditemukan bos!")
+        raise HTTPException(status_code=404, detail="Set row not found or unauthorized.")
         
     if weight_kg is not None:
         db_set.weight_kg = weight_kg
@@ -49,6 +225,7 @@ def update_workout_set_detail(
     if set_type is not None:
         db_set.set_type = set_type
         
+    # Dynamically re-evaluate PR flag upon weight alteration
     if weight_kg is not None:
         highest_past_weight = db.query(WorkoutSet.weight_kg).\
             join(WorkoutSession).\
@@ -65,13 +242,9 @@ def update_workout_set_detail(
     return db_set
 
 @router.delete("/set/{set_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_single_workout_set(
-    set_id: str, 
-    db: Session = Depends(get_db), 
-    current_user: User = Depends(get_current_user)
-):
+def delete_single_workout_set(set_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
-    [M6 Backend] Permanently delete a single set row from a workout log session.
+    Permanently delete a single set row from a workout log session.
     """
     db_set = db.query(WorkoutSet).\
         join(WorkoutSession).\
@@ -79,166 +252,25 @@ def delete_single_workout_set(
         first()
         
     if not db_set:
-        raise HTTPException(status_code=404, detail="Baris set tidak ditemukan atau bukan milikmu.")
+        raise HTTPException(status_code=404, detail="Set row not found or unauthorized.")
         
     db.delete(db_set)
     db.commit()
     return None
 
-@router.delete("/session/{session_id}", status_code=200)
-def delete_workout_session(
-    session_id: int, 
-    db: Session = Depends(get_db), 
-    current_user: User = Depends(get_current_user)
-):
+# =====================================================================
+# 🔔 DEVICE TOKEN REGISTRATION (M5)
+# =====================================================================
+
+class PushTokenPayload(BaseModel):
+    token: str
+
+@router.post("/push-token", status_code=status.HTTP_200_OK)
+def register_device_push_token(payload: PushTokenPayload, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
-    Delete Workout Session
+    Receive and store the unique Expo Notification Token from the user's mobile device 
+    for the proactive reminder engine.
     """
-    session = db.query(WorkoutSession).filter(
-        WorkoutSession.id == session_id, 
-        WorkoutSession.user_id == current_user.id
-    ).first()
-    
-    if not session:
-        raise HTTPException(status_code=404, detail="Sesi latihan emang ga ada atau bukan punyamu.")
-        
-    # Hapus semua set yang terikat dengan session ini terlebih dahulu
-    db.query(WorkoutSet).filter(WorkoutSet.session_id == session_id).delete()
-    
-    # Hapus sesi utamanya
-    db.delete(session)
+    current_user.expo_push_token = payload.token
     db.commit()
-    
-    return {"status": "success", "message": f"Sesi latihan {session_id} berhasil di-wipe!"}
-
-@router.delete("/exercises/{exercise_id}", status_code=200)
-def delete_custom_exercise(
-    exercise_id: int, 
-    db: Session = Depends(get_db), 
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Remove Custom Exercises
-    """
-    exercise = db.query(Exercise).filter(Exercise.id == exercise_id).first()
-    
-    if not exercise:
-        raise HTTPException(status_code=404, detail="Gerakan gym tidak ditemukan.")
-        
-    is_used = db.query(WorkoutSet).filter(WorkoutSet.exercise_id == exercise_id).first()
-    
-    if is_used:
-        raise HTTPException(
-            status_code=400, 
-            detail="Gak bisa dihapus bos! Gerakan ini sudah masuk ke data history latihanmu. Hapus set latiitannya dulu."
-        )
-        
-    db.delete(exercise)
-    db.commit()
-    
-    return {"status": "success", "message": f"Gerakan '{exercise.name}' berhasil dihapus."}
-
-
-@router.post("/session", response_model=WorkoutSessionResponse, status_code=status.HTTP_201_CREATED)
-def record_workout_session(obj_in: WorkoutSessionCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """
-    Log a completed workout session with its comprehensive array of sets.
-    Implements real-time Personal Record (PR) detection per exercise.
-    """
-    # 1. Initialize and save the parent Workout Session
-    db_session = WorkoutSession(
-        user_id=current_user.id,
-        title=obj_in.title,
-        start_time=datetime.utcnow(),
-        end_time=datetime.utcnow(),
-        duration_minutes=60 # Default static estimation for MVP baseline
-    )
-    db.add(db_session)
-    db.flush() # Secure the db_session.id before adding children sets
-
-    saved_sets = []
-
-    # 2. Iterate and process each incoming structural set item
-    for set_data in obj_in.sets:
-        # Verify if the chosen exercise profile exists
-        exercise_exists = db.query(Exercise).filter(Exercise.id == set_data.exercise_id).first()
-        if not exercise_exists:
-            db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, 
-                detail=f"Exercise parameter with ID {set_data.exercise_id} not found."
-            )
-
-        # 🚀 THE PR DETECTION ENGINE LOGIC
-        # Query the highest weight ever lifted by THIS user for THIS specific exercise
-        max_previous_weight = db.query(func.max(WorkoutSet.weight_kg)).\
-            join(WorkoutSession, WorkoutSet.session_id == WorkoutSession.id).\
-            filter(WorkoutSession.user_id == current_user.id).\
-            filter(WorkoutSet.exercise_id == set_data.exercise_id).scalar()
-
-        # Determine if the current lift sets a new milestone
-        is_personal_record = False
-        if max_previous_weight is None or set_data.weight_kg > max_previous_weight:
-            is_personal_record = True
-
-        # 3. Instantiate and persist the child WorkoutSet record
-        db_set = WorkoutSet(
-            session_id=db_session.id,
-            exercise_id=set_data.exercise_id,
-            set_number=set_data.set_number,
-            weight_kg=set_data.weight_kg,
-            reps=set_data.reps,
-            set_type=set_data.set_type,
-            is_pr=is_personal_record
-        )
-        db.add(db_set)
-        saved_sets.append(db_set)
-
-    db.commit()
-    
-    # Refresh to safely serialize nested SQLAlchemy objects back to Pydantic
-    db.refresh(db_session)
-
-    try:
-        print(f"\n[ANALYTICS] 🧠 Scanning progressive overload status for Session: '{db_session.title}'")
-        
-        current_exercise_volumes = {}
-        for s in saved_sets:
-            if s.exercise_id not in current_exercise_volumes:
-                current_exercise_volumes[s.exercise_id] = 0
-            current_exercise_volumes[s.exercise_id] += (s.weight_kg * s.reps)
-
-        for exercise_id, current_vol in current_exercise_volumes.items():
-            ex_detail = db.query(Exercise).filter(Exercise.id == exercise_id).first()
-            ex_name = ex_detail.name if ex_detail else "Unknown Exercise"
-
-            last_set_with_same_exercise = db.query(WorkoutSet).\
-                join(WorkoutSession, WorkoutSet.session_id == WorkoutSession.id).\
-                filter(WorkoutSession.user_id == current_user.id).\
-                filter(WorkoutSession.id != db_session.id).\
-                filter(WorkoutSet.exercise_id == exercise_id).\
-                order_by(WorkoutSession.start_time.desc()).\
-                first()
-
-            if last_set_with_same_exercise:
-                target_past_session_id = last_set_with_same_exercise.session_id
-                
-                past_sets = db.query(WorkoutSet).\
-                    filter(WorkoutSet.session_id == target_past_session_id).\
-                    filter(WorkoutSet.exercise_id == exercise_id).all()
-                    
-                past_vol = sum([s.weight_kg * s.reps for s in past_sets])
-
-                if current_vol > past_vol:
-                    diff = current_vol - past_vol
-                    print(f"🔥 OVERLOAD DETECTED on [{ex_name}]: Volume naik +{diff} kg! (Hari ini: {current_vol}kg vs Terakhir: {past_vol}kg)")
-                else:
-                    print(f"ℹ️ [{ex_name}]: Latihan tercatat. Tidak ada overload ({current_vol}kg vs {past_vol}kg).")
-            else:
-                print(f"ℹ️ [{ex_name}]: Ini pertama kalinya user main gerakan ini. Belum ada data pembanding.")
-
-        print("[ANALYTICS] ✅ Per-exercise progressive overload scan completed.\n")
-
-    except Exception as analytic_error:
-        print(f"⚠️ Analytic engine failed to calculate progressive overload: {str(analytic_error)}")
-    return db_session
+    return {"status": "success", "message": "Device push token successfully linked to your account."}
