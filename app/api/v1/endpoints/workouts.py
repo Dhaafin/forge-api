@@ -111,6 +111,33 @@ def delete_workout_session(
     
     return {"status": "success", "message": f"Sesi latihan {session_id} berhasil di-wipe!"}
 
+@router.delete("/exercises/{exercise_id}", status_code=200)
+def delete_custom_exercise(
+    exercise_id: int, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Remove Custom Exercises
+    """
+    exercise = db.query(Exercise).filter(Exercise.id == exercise_id).first()
+    
+    if not exercise:
+        raise HTTPException(status_code=404, detail="Gerakan gym tidak ditemukan.")
+        
+    is_used = db.query(WorkoutSet).filter(WorkoutSet.exercise_id == exercise_id).first()
+    
+    if is_used:
+        raise HTTPException(
+            status_code=400, 
+            detail="Gak bisa dihapus bos! Gerakan ini sudah masuk ke data history latihanmu. Hapus set latiitannya dulu."
+        )
+        
+    db.delete(exercise)
+    db.commit()
+    
+    return {"status": "success", "message": f"Gerakan '{exercise.name}' berhasil dihapus."}
+
 
 @router.post("/session", response_model=WorkoutSessionResponse, status_code=status.HTTP_201_CREATED)
 def record_workout_session(obj_in: WorkoutSessionCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
