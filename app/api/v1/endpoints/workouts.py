@@ -82,28 +82,47 @@ def record_workout_session(obj_in: WorkoutSessionCreate, db: Session = Depends(g
     
     # Refresh to safely serialize nested SQLAlchemy objects back to Pydantic
     db.refresh(db_session)
-    
+
     try:
-        current_volume = sum([s.weight_kg * s.reps for s in saved_sets])
+        print(f"\n[ANALYTICS] 🧠 Scanning progressive overload status for Session: '{db_session.title}'")
         
-        previous_session = db.query(WorkoutSession).\
-            filter(WorkoutSession.user_id == current_user.id).\
-            filter(WorkoutSession.id != db_session.id).\
-            order_by(WorkoutSession.start_time.desc()).\
-            first()
-            
-        if previous_session:
-            prev_sets = db.query(WorkoutSet).filter(WorkoutSet.session_id == previous_session.id).all()
-            previous_volume = sum([s.weight_kg * s.reps for s in prev_sets])
-            
-            if current_volume > previous_volume:
-                overload_diff = current_volume - previous_volume
-                print(f"🔥 PROGRESSIVE OVERLOAD DETECTED! User {current_user.name} meningkatkan total volume sebesar {overload_diff} kg dibandingkan sesi terakhir!")
+        current_exercise_volumes = {}
+        for s in saved_sets:
+            if s.exercise_id not in current_exercise_volumes:
+                current_exercise_volumes[s.exercise_id] = 0
+            current_exercise_volumes[s.exercise_id] += (s.weight_kg * s.reps)
+
+        for exercise_id, current_vol in current_exercise_volumes.items():
+            ex_detail = db.query(Exercise).filter(Exercise.id == exercise_id).first()
+            ex_name = ex_detail.name if ex_detail else "Unknown Exercise"
+
+            last_set_with_same_exercise = db.query(WorkoutSet).\
+                join(WorkoutSession, WorkoutSet.session_id == WorkoutSession.id).\
+                filter(WorkoutSession.user_id == current_user.id).\
+                filter(WorkoutSession.id != db_session.id).\
+                filter(WorkoutSet.exercise_id == exercise_id).\
+                order_by(WorkoutSession.start_time.desc()).\
+                first()
+
+            if last_set_with_same_exercise:
+                target_past_session_id = last_set_with_same_exercise.session_id
+                
+                past_sets = db.query(WorkoutSet).\
+                    filter(WorkoutSet.session_id == target_past_session_id).\
+                    filter(WorkoutSet.exercise_id == exercise_id).all()
+                    
+                past_vol = sum([s.weight_kg * s.reps for s in past_sets])
+
+                if current_vol > past_vol:
+                    diff = current_vol - past_vol
+                    print(f"🔥 OVERLOAD DETECTED on [{ex_name}]: Volume naik +{diff} kg! (Hari ini: {current_vol}kg vs Terakhir: {past_vol}kg)")
+                else:
+                    print(f"ℹ️ [{ex_name}]: Latihan tercatat. Tidak ada overload ({current_vol}kg vs {past_vol}kg).")
             else:
-                print(f"ℹ️ Workout logged. Volume did not exceed previous session.")
-        else:
-            print("ℹ️ First workout session logged. Need more historical data to calculate progressive overload.")
-            
+                print(f"ℹ️ [{ex_name}]: Ini pertama kalinya user main gerakan ini. Belum ada data pembanding.")
+
+        print("[ANALYTICS] ✅ Per-exercise progressive overload scan completed.\n")
+
     except Exception as analytic_error:
-        print(f"⚠️ Analytic engine failed to calculate overload: {str(analytic_error)}")
+        print(f"⚠️ Analytic engine failed to calculate progressive overload: {str(analytic_error)}")
     return db_session
