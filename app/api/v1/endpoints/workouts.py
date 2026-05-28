@@ -82,4 +82,28 @@ def record_workout_session(obj_in: WorkoutSessionCreate, db: Session = Depends(g
     
     # Refresh to safely serialize nested SQLAlchemy objects back to Pydantic
     db.refresh(db_session)
+    
+    try:
+        current_volume = sum([s.weight_kg * s.reps for s in saved_sets])
+        
+        previous_session = db.query(WorkoutSession).\
+            filter(WorkoutSession.user_id == current_user.id).\
+            filter(WorkoutSession.id != db_session.id).\
+            order_by(WorkoutSession.start_time.desc()).\
+            first()
+            
+        if previous_session:
+            prev_sets = db.query(WorkoutSet).filter(WorkoutSet.session_id == previous_session.id).all()
+            previous_volume = sum([s.weight_kg * s.reps for s in prev_sets])
+            
+            if current_volume > previous_volume:
+                overload_diff = current_volume - previous_volume
+                print(f"🔥 PROGRESSIVE OVERLOAD DETECTED! User {current_user.name} meningkatkan total volume sebesar {overload_diff} kg dibandingkan sesi terakhir!")
+            else:
+                print(f"ℹ️ Workout logged. Volume did not exceed previous session.")
+        else:
+            print("ℹ️ First workout session logged. Need more historical data to calculate progressive overload.")
+            
+    except Exception as analytic_error:
+        print(f"⚠️ Analytic engine failed to calculate overload: {str(analytic_error)}")
     return db_session
