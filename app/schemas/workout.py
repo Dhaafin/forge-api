@@ -54,3 +54,21 @@ class WorkoutSessionResponse(BaseModel):
 
     class Config:
         from_attributes = True
+        
+class ExerciseCreate(BaseModel):
+    """
+    Schema for creating a new custom exercise.
+    """
+    name: str
+    target_muscle: str
+
+class ExerciseResponse(BaseModel):
+    """
+    Schema for exercise response.
+    """
+    id: str
+    name: str
+    target_muscle: str
+
+    class Config:
+        from_attributes = True # Penting untuk SQLAlchemy
