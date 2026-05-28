@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from pydantic import BaseModel
 
 from app.core.database import get_db
@@ -117,14 +117,65 @@ def delete_exercise_record(exercise_id: str, db: Session = Depends(get_db), curr
 # =====================================================================
 
 @router.get("/session/history", response_model=List[WorkoutSessionResponse])
-def get_workout_history(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def get_workout_history(
+    search: Optional[str] = Query(None, description="Search in session title"),
+    start_date: Optional[date] = Query(None, description="Filter sessions starting on or after this date"),
+    end_date: Optional[date] = Query(None, description="Filter sessions starting on or before this date"),
+    time_window: Optional[str] = Query(None, description="Quick time presets: '7d', '30d', '90d', 'ytd'"),
+    sort_by: str = Query("start_time", description="Field to sort by (start_time, duration_minutes, title)"),
+    order: str = Query("desc", description="Sort direction (asc, desc)"),
+    limit: Optional[int] = Query(20, ge=1, le=100, description="Limit pagination"),
+    offset: Optional[int] = Query(0, ge=0, description="Offset pagination"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """
     Retrieve all historical training logs belonging exclusively to the authenticated user.
-    Ordered chronologically by the most recent session.
+    Supports searching by title, sorting, date-range/window filtering, and pagination.
     """
-    return db.query(WorkoutSession).\
-        filter(WorkoutSession.user_id == current_user.id).\
-        order_by(WorkoutSession.start_time.desc()).all()
+    query = db.query(WorkoutSession).filter(WorkoutSession.user_id == current_user.id)
+
+    # Search (title only)
+    if search:
+        query = query.filter(WorkoutSession.title.ilike(f"%{search}%"))
+
+    # Explicit boundaries
+    if start_date:
+        query = query.filter(WorkoutSession.start_time >= datetime.combine(start_date, datetime.min.time()))
+    if end_date:
+        query = query.filter(WorkoutSession.start_time <= datetime.combine(end_date, datetime.max.time()))
+
+    # Time Window presets (only applies if start_date/end_date are not provided)
+    if time_window and not (start_date or end_date):
+        now = datetime.utcnow()
+        if time_window == "7d":
+            query = query.filter(WorkoutSession.start_time >= now - timedelta(days=7))
+        elif time_window == "30d":
+            query = query.filter(WorkoutSession.start_time >= now - timedelta(days=30))
+        elif time_window == "90d":
+            query = query.filter(WorkoutSession.start_time >= now - timedelta(days=90))
+        elif time_window == "ytd":
+            query = query.filter(WorkoutSession.start_time >= datetime(now.year, 1, 1))
+
+    # Sort validation/mapping
+    whitelisted_fields = {
+        "start_time": WorkoutSession.start_time,
+        "duration_minutes": WorkoutSession.duration_minutes,
+        "title": WorkoutSession.title
+    }
+    sort_column = whitelisted_fields.get(sort_by, WorkoutSession.start_time)
+
+    if order.lower() == "asc":
+        query = query.order_by(sort_column.asc())
+    else:
+        query = query.order_by(sort_column.desc())
+
+    if limit is not None:
+        query = query.limit(limit)
+    if offset is not None:
+        query = query.offset(offset)
+
+    return query.all()
 
 @router.post("/session", response_model=WorkoutSessionResponse, status_code=status.HTTP_201_CREATED)
 def record_workout_session(obj_in: WorkoutSessionCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
