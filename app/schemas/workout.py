@@ -1,28 +1,31 @@
-# app/schemas/workout.py
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional
 from uuid import UUID
 from datetime import datetime
 
-# Database Schemas
+# Menggunakan satu standar Config untuk semua class (Pydantic v2)
+common_config = ConfigDict(from_attributes=True, arbitrary_types_allowed=True)
+
+# 1. Exercise Schemas
 class ExerciseResponse(BaseModel):
-    id: UUID
+    id: UUID  # Gunakan UUID di sini
     name: str
     target_muscle: str
 
-    class Config:
-        from_attributes = True
+    model_config = common_config
 
+class ExerciseCreate(BaseModel):
+    name: str
+    target_muscle: str
 
-# Workout Schemas
+# 2. Workout Set Schemas
 class WorkoutSetCreate(BaseModel):
     exercise_id: UUID
-    set_number: int = Field(..., description="Set ke-berapa (1, 2, 3, dst)", example=1)
-    weight_kg: float = Field(..., description="Beban angkatan dalam kg", example=60.0)
-    reps: int = Field(..., description="Jumlah repetisi gerakan", example=10)
-    set_type: str = Field(default="normal", description="Tipe set: 'normal', 'warmup', 'dropset', 'failure'", example="normal")
+    set_number: int = Field(..., description="Set ke-berapa", example=1)
+    weight_kg: float = Field(..., description="Beban angkatan", example=60.0)
+    reps: int = Field(..., description="Jumlah repetisi", example=10)
+    set_type: str = Field(default="normal", description="Tipe set")
 
-# Data Structure
 class WorkoutSetResponse(BaseModel):
     id: UUID
     session_id: UUID
@@ -31,18 +34,15 @@ class WorkoutSetResponse(BaseModel):
     weight_kg: float
     reps: int
     set_type: str
-    is_pr: bool  # Flag sakti buat memicu alert piala 🏆 di HP member!
+    is_pr: bool 
 
-    class Config:
-        from_attributes = True
+    model_config = common_config
 
-
-# Workout Session
+# 3. Workout Session Schemas
 class WorkoutSessionCreate(BaseModel):
-    title: Optional[str] = Field(default="Sore Workout Session", description="Nama sesi latihan", example="Push Day Heavy")
-    sets: List[WorkoutSetCreate] = Field(..., description="Array kumpulan set yang dieksekusi di sesi ini")
+    title: Optional[str] = Field(default="Sore Workout Session", example="Push Day Heavy")
+    sets: List[WorkoutSetCreate] = Field(..., description="Array kumpulan set")
 
-# Response
 class WorkoutSessionResponse(BaseModel):
     id: UUID
     user_id: UUID
@@ -50,25 +50,6 @@ class WorkoutSessionResponse(BaseModel):
     start_time: datetime
     end_time: Optional[datetime]
     duration_minutes: Optional[int]
-    sets: List[WorkoutSetResponse] = []  
+    sets: List[WorkoutSetResponse] = [] 
 
-    class Config:
-        from_attributes = True
-        
-class ExerciseCreate(BaseModel):
-    """
-    Schema for creating a new custom exercise.
-    """
-    name: str
-    target_muscle: str
-
-class ExerciseResponse(BaseModel):
-    """
-    Schema for exercise response.
-    """
-    id: str
-    name: str
-    target_muscle: str
-
-    class Config:
-        from_attributes = True # Penting untuk SQLAlchemy
+    model_config = common_config
