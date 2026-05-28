@@ -11,7 +11,7 @@ from app.models.user import User
 from app.models.exercise import Exercise
 from app.models.workout_session import WorkoutSession
 from app.models.workout_set import WorkoutSet
-from app.schemas.workout import WorkoutSessionCreate, WorkoutSessionResponse, ExerciseResponse
+from app.schemas.workout import WorkoutSessionCreate, WorkoutSessionResponse, ExerciseResponse, WorkoutSetResponse
 
 router = APIRouter()
 
@@ -21,6 +21,74 @@ def get_exercise_library(db: Session = Depends(get_db), current_user: User = Dep
     Fetch the list of all available structural exercises for the exercise picker menu.
     """
     return db.query(Exercise).order_by(Exercise.target_muscle).all()
+
+@router.put("/set/{set_id}", response_model=WorkoutSetResponse)
+def update_workout_set_detail(
+    set_id: str, 
+    weight_kg: float = None, 
+    reps: int = None, 
+    set_type: str = None,
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    """
+    [M6 Backend] Edit specific metrics (weight, reps, type) of an individual workout set row.
+    """
+    db_set = db.query(WorkoutSet).\
+        join(WorkoutSession).\
+        filter(WorkoutSet.id == set_id, WorkoutSession.user_id == current_user.id).\
+        first()
+        
+    if not db_set:
+        raise HTTPException(status_code=404, detail="Baris set latihan tidak ditemukan bos!")
+        
+    if weight_kg is not None:
+        db_set.weight_kg = weight_kg
+    if reps is not None:
+        db_set.reps = reps
+    if set_type is not None:
+        db_set.set_type = set_type
+        
+    if weight_kg is not None:
+        highest_past_weight = db.query(WorkoutSet.weight_kg).\
+            join(WorkoutSession).\
+            filter(WorkoutSession.user_id == current_user.id).\
+            filter(WorkoutSet.exercise_id == db_set.exercise_id).\
+            filter(WorkoutSet.id != db_set.id).\
+            order_by(WorkoutSet.weight_kg.desc()).\
+            first()
+            
+        db_set.is_pr = highest_past_weight is None or weight_kg > highest_past_weight[0]
+
+    db.commit()
+    db.refresh(db_set)
+    return db_set
+
+@router.delete("/session/{session_id}", status_code=200)
+def delete_workout_session(
+    session_id: int, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Delete Workout Session
+    """
+    session = db.query(WorkoutSession).filter(
+        WorkoutSession.id == session_id, 
+        WorkoutSession.user_id == current_user.id
+    ).first()
+    
+    if not session:
+        raise HTTPException(status_code=404, detail="Sesi latihan emang ga ada atau bukan punyamu.")
+        
+    # Hapus semua set yang terikat dengan session ini terlebih dahulu
+    db.query(WorkoutSet).filter(WorkoutSet.session_id == session_id).delete()
+    
+    # Hapus sesi utamanya
+    db.delete(session)
+    db.commit()
+    
+    return {"status": "success", "message": f"Sesi latihan {session_id} berhasil di-wipe!"}
 
 
 @router.post("/session", response_model=WorkoutSessionResponse, status_code=status.HTTP_201_CREATED)
