@@ -183,7 +183,19 @@ def record_workout_session(obj_in: WorkoutSessionCreate, db: Session = Depends(g
     Commit a new active training log. Auto-evaluates historical sets to flag Personal Records (PR)
     and processes progressive overload analytics in the background.
     """
-    # 1. Initialize the parent session entity
+    # 1. Validate that all exercise IDs exist in the database
+    exercise_ids = {s.exercise_id for s in obj_in.sets}
+    if exercise_ids:
+        existing_exercises = db.query(Exercise.id).filter(Exercise.id.in_(exercise_ids)).all()
+        existing_ids = {e.id for e in existing_exercises}
+        missing_ids = exercise_ids - existing_ids
+        if missing_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Exercise(s) not found: {', '.join(str(m) for m in missing_ids)}"
+            )
+
+    # 2. Initialize the parent session entity
     db_session = WorkoutSession(
         user_id=current_user.id,
         title=obj_in.title,
@@ -192,13 +204,12 @@ def record_workout_session(obj_in: WorkoutSessionCreate, db: Session = Depends(g
         duration_minutes=obj_in.duration_minutes
     )
     db.add(db_session)
-    db.commit()
-    db.refresh(db_session)
+    db.flush()  # Generate UUID/ID for db_session without committing the transaction
 
-    # 2. Iterate through incoming sets and evaluate Personal Records (PR)
+    # 3. Iterate through incoming sets and evaluate Personal Records (PR)
     for s in obj_in.sets:
         highest_past_weight = db.query(WorkoutSet.weight_kg).\
-            join(WorkoutSession).\
+            join(WorkoutSession, WorkoutSet.session_id == WorkoutSession.id).\
             filter(WorkoutSession.user_id == current_user.id).\
             filter(WorkoutSet.exercise_id == s.exercise_id).\
             filter(WorkoutSession.id != db_session.id).\
@@ -296,7 +307,7 @@ def update_workout_set_detail(set_id: str, weight_kg: float = None, reps: int = 
     Automatically recalculates the Personal Record (PR) flag if weight changes.
     """
     db_set = db.query(WorkoutSet).\
-        join(WorkoutSession).\
+        join(WorkoutSession, WorkoutSet.session_id == WorkoutSession.id).\
         filter(WorkoutSet.id == set_id, WorkoutSession.user_id == current_user.id).\
         first()
         
@@ -332,7 +343,7 @@ def delete_single_workout_set(set_id: str, db: Session = Depends(get_db), curren
     Permanently delete a single set row from a workout log session.
     """
     db_set = db.query(WorkoutSet).\
-        join(WorkoutSession).\
+        join(WorkoutSession, WorkoutSet.session_id == WorkoutSession.id).\
         filter(WorkoutSet.id == set_id, WorkoutSession.user_id == current_user.id).\
         first()
         

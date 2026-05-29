@@ -2,6 +2,7 @@ import datetime
 import uuid
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
 from app.core.database import Base
 
 class WorkoutSession(Base):
@@ -13,3 +14,5 @@ class WorkoutSession(Base):
     start_time = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
     end_time = Column(DateTime, nullable=True)
     duration_minutes = Column(Integer, nullable=True)
+    
+    sets = relationship("WorkoutSet", backref="session", cascade="all, delete-orphan", lazy="joined")

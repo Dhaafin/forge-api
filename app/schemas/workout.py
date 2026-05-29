@@ -41,6 +41,7 @@ class WorkoutSetResponse(BaseModel):
 # 3. Workout Session Schemas
 class WorkoutSessionCreate(BaseModel):
     title: Optional[str] = Field(default="Sore Workout Session", example="Push Day Heavy")
+    duration_minutes: Optional[int] = Field(default=0, description="Duration in minutes")
     sets: List[WorkoutSetCreate] = Field(..., description="Array kumpulan set")
 
 class WorkoutSessionResponse(BaseModel):
