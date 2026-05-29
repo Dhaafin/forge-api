@@ -30,6 +30,7 @@ class WorkoutSetResponse(BaseModel):
     id: UUID
     session_id: UUID
     exercise_id: UUID
+    exercise_name: Optional[str] = None
     set_number: int
     weight_kg: float
     reps: int

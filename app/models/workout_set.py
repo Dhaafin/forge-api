@@ -1,6 +1,7 @@
 import uuid
-from sqlalchemy import Column, Integer, String, ForeignKey, Boolean,Float
+from sqlalchemy import Column, Integer, String, ForeignKey, Boolean, Float
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
 from app.core.database import Base
 
 class WorkoutSet(Base):
@@ -16,4 +17,11 @@ class WorkoutSet(Base):
     
     set_type = Column(String, default="normal")
     is_pr = Column(Boolean, default=False, nullable=False)
+
+    exercise = relationship("Exercise", lazy="joined")
+
+    @property
+    def exercise_name(self) -> str:
+        return self.exercise.name if self.exercise else ""
+
     
