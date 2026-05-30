@@ -43,6 +43,8 @@ class WorkoutSetResponse(BaseModel):
 class WorkoutSessionCreate(BaseModel):
     title: Optional[str] = Field(default="Sore Workout Session", example="Push Day Heavy")
     duration_minutes: Optional[int] = Field(default=0, description="Duration in minutes")
+    start_time: Optional[datetime] = Field(default=None, description="Custom start time for retroactive logging")
+    end_time: Optional[datetime] = Field(default=None, description="Custom end time for retroactive logging")
     sets: List[WorkoutSetCreate] = Field(..., description="Array kumpulan set")
 
 class WorkoutSessionResponse(BaseModel):

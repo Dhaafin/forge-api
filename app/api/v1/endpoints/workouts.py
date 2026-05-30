@@ -195,13 +195,22 @@ def record_workout_session(obj_in: WorkoutSessionCreate, db: Session = Depends(g
                 detail=f"Exercise(s) not found: {', '.join(str(m) for m in missing_ids)}"
             )
 
-    # 2. Initialize the parent session entity
+    # 2. Initialize the parent session entity (handling retroactive start/end/duration)
+    session_start = obj_in.start_time or datetime.utcnow()
+    if obj_in.end_time:
+        session_end = obj_in.end_time
+        calc_duration = int((session_end - session_start).total_seconds() / 60)
+        duration = obj_in.duration_minutes or max(0, calc_duration)
+    else:
+        duration = obj_in.duration_minutes or 0
+        session_end = session_start + timedelta(minutes=duration)
+
     db_session = WorkoutSession(
         user_id=current_user.id,
         title=obj_in.title,
-        start_time=datetime.utcnow(),
-        end_time=datetime.utcnow(),
-        duration_minutes=obj_in.duration_minutes
+        start_time=session_start,
+        end_time=session_end,
+        duration_minutes=duration
     )
     db.add(db_session)
     db.flush()  # Generate UUID/ID for db_session without committing the transaction
