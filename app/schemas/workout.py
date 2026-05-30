@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_serializer
 from typing import List, Optional
 from uuid import UUID
 from datetime import datetime
@@ -57,3 +57,11 @@ class WorkoutSessionResponse(BaseModel):
     sets: List[WorkoutSetResponse] = [] 
 
     model_config = common_config
+
+    @field_serializer('start_time', 'end_time')
+    def serialize_dt(self, dt: Optional[datetime]) -> Optional[str]:
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        return dt.astimezone().strftime("%Y-%m-%dT%H:%M:%SZ")
