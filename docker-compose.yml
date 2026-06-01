@@ -1,0 +1,9 @@
+services:
+  forge-api:
+    build: .
+    container_name: forge-api
+    restart: always
+    ports:
+      - "8001:8000"
+    env_file:
+      - .env
