@@ -1,8 +1,23 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from contextlib import asynccontextmanager
+import secrets
 
 from app.core.scheduler import scheduler, start_scheduler
 from app.api.v1.endpoints import auth, workouts 
+
+security = HTTPBasic()
+
+def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)):
+    correct_username = secrets.compare_digest(credentials.username, "dhaafinm")
+    correct_password = secrets.compare_digest(credentials.password, "wertyer5321")
+    if not (correct_username and correct_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            headers={"WWW-Authenticate": "Basic"},
+        )
+
+app = FastAPI(dependencies=[Depends(verify_credentials)])
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
