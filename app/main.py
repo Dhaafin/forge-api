@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.openapi.docs import get_swagger_ui_html
 from contextlib import asynccontextmanager
 import secrets
 
@@ -30,15 +31,26 @@ app = FastAPI(
     description="Backend engine for Forge Gym Tracker Platform",
     version="1.0.0",
     lifespan=lifespan,
-    dependencies=[Depends(verify_credentials)]  
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
+# Routers
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
 app.include_router(workouts.router, prefix="/api/v1/workouts", tags=["Workouts Core"])
 
-@app.get("/")
+@app.get("/", dependencies=[Depends(verify_credentials)])
 def read_root():
     return {
         "status": "online",
         "message": "Welcome to Forge API",
     }
+
+@app.get("/docs", include_in_schema=False, dependencies=[Depends(verify_credentials)])
+async def custom_swagger():
+    return get_swagger_ui_html(openapi_url="/openapi.json", title="Forge API Docs")
+
+@app.get("/openapi.json", include_in_schema=False, dependencies=[Depends(verify_credentials)])
+async def custom_openapi():
+    return app.openapi()
