@@ -2,7 +2,7 @@ import datetime
 import uuid
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, backref
 from app.core.database import Base
 
 class AICoachLog(Base):
@@ -20,4 +20,4 @@ class AICoachLog(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     user = relationship("User", backref="ai_coach_logs")
-    session = relationship("WorkoutSession", backref="ai_coach_log", uselist=False)
+    session = relationship("WorkoutSession", backref=backref("ai_coach_log", cascade="all, delete-orphan"), uselist=False)

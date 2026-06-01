@@ -300,7 +300,6 @@ def delete_workout_session(session_id: str, db: Session = Depends(get_db), curre
     if not db_session:
         raise HTTPException(status_code=404, detail="Workout log entry not found.")
         
-    db.query(WorkoutSet).filter(WorkoutSet.session_id == session_id).delete()
     db.delete(db_session)
     db.commit()
     return None
