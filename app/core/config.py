@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     
     OPENROUTER_API_KEY: str = ""
-    OPENROUTER_MODEL: str = "google/gemma-2-9b-it:free"
+    OPENROUTER_MODEL: str = "openrouter/free"
 
     class Config:
         env_file = ".env"
