@@ -14,8 +14,12 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          script_stop: true # Penting: Berhenti jika ada error
+          timeout: 60s # Tambahkan timeout agar tidak menggantung terlalu lama
+          command_timeout: 5m # Beri waktu lebih untuk proses build docker
           script: |
             cd /root/forge-api
+            # Pastikan origin adalah HTTPS jika tidak ingin pusing dengan SSH Key
             git pull origin main
             docker compose up -d --build
             docker image prune -f
