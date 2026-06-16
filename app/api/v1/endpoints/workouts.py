@@ -11,7 +11,13 @@ from app.models.user import User
 from app.models.exercise import Exercise
 from app.models.workout_session import WorkoutSession
 from app.models.workout_set import WorkoutSet
-from app.schemas.workout import WorkoutSessionCreate, WorkoutSessionResponse, ExerciseResponse, ExerciseCreate, WorkoutSetResponse
+from app.schemas.workout import (
+    WorkoutSessionCreate, WorkoutSessionResponse, ExerciseResponse, ExerciseCreate,
+    WorkoutSetResponse, WorkoutParseRequest, WorkoutParseResponse, WorkoutParseExerciseItem,
+    WorkoutParseSet, SuggestedExercise
+)
+from app.services.ai_service import parse_workout_notes_with_ai
+import difflib
 
 router = APIRouter()
 
@@ -378,3 +384,75 @@ def register_device_push_token(payload: PushTokenPayload, db: Session = Depends(
     current_user.expo_push_token = payload.token
     db.commit()
     return {"status": "success", "message": "Device push token successfully linked to your account."}
+
+
+@router.post("/session/parse-notes", response_model=WorkoutParseResponse)
+async def parse_workout_notes_endpoint(
+    payload: WorkoutParseRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Parse unstructured workout notes using AI and perform fuzzy match logic to associate
+    exercise names with database entries.
+    """
+    parsed_json = await parse_workout_notes_with_ai(payload.raw_text)
+    
+    db_exercises = db.query(Exercise).all()
+    exercise_name_map = {e.name.lower().strip(): e for e in db_exercises}
+    exercise_names = list(exercise_name_map.keys())
+
+    response_exercises = []
+
+    for item in parsed_json.get("exercises", []):
+        raw_name = item.get("raw_name", "").strip()
+        raw_name_lower = raw_name.lower()
+        
+        matched = False
+        exercise_id = None
+        exercise_name = None
+        suggested_exercise = None
+
+        if raw_name_lower in exercise_name_map:
+            matched = True
+            db_ex = exercise_name_map[raw_name_lower]
+            exercise_id = db_ex.id
+            exercise_name = db_ex.name
+        else:
+            matches = difflib.get_close_matches(raw_name_lower, exercise_names, n=1, cutoff=0.6)
+            if matches:
+                db_ex = exercise_name_map[matches[0]]
+                suggested_exercise = SuggestedExercise(
+                    id=db_ex.id,
+                    name=db_ex.name,
+                    target_muscle=db_ex.target_muscle
+                )
+
+        sets_list = []
+        for set_data in item.get("sets", []):
+            sets_list.append(
+                WorkoutParseSet(
+                    set_number=set_data.get("set_number", 1),
+                    weight_kg=float(set_data.get("weight_kg", 0.0)),
+                    reps=int(set_data.get("reps", 0)),
+                    set_type=set_data.get("set_type", "normal")
+                )
+            )
+
+        response_exercises.append(
+            WorkoutParseExerciseItem(
+                raw_name=raw_name,
+                matched=matched,
+                exercise_id=exercise_id,
+                exercise_name=exercise_name,
+                suggested_exercise=suggested_exercise,
+                inferred_target_muscle=item.get("inferred_target_muscle"),
+                sets=sets_list
+            )
+        )
+
+    return WorkoutParseResponse(
+        title=parsed_json.get("title"),
+        date=parsed_json.get("date"),
+        exercises=response_exercises
+    )

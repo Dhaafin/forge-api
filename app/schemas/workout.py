@@ -65,3 +65,38 @@ class WorkoutSessionResponse(BaseModel):
         if dt.tzinfo is None:
             return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         return dt.astimezone().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+# 4. AI Parsing Schemas
+class WorkoutParseRequest(BaseModel):
+    raw_text: str = Field(..., description="Raw text workout notes to parse", example="## 06-04-26 (Pull Day)\n- Lat Pulldowns 3 x 12 (30kg)")
+
+class WorkoutParseSet(BaseModel):
+    set_number: int
+    weight_kg: float
+    reps: int
+    set_type: str = "normal"
+
+class SuggestedExercise(BaseModel):
+    id: UUID
+    name: str
+    target_muscle: str
+
+    model_config = common_config
+
+class WorkoutParseExerciseItem(BaseModel):
+    raw_name: str
+    matched: bool
+    exercise_id: Optional[UUID] = None
+    exercise_name: Optional[str] = None
+    suggested_exercise: Optional[SuggestedExercise] = None
+    inferred_target_muscle: Optional[str] = None
+    sets: List[WorkoutParseSet] = []
+
+    model_config = common_config
+
+class WorkoutParseResponse(BaseModel):
+    title: Optional[str] = None
+    date: Optional[str] = None
+    exercises: List[WorkoutParseExerciseItem] = []
+
+    model_config = common_config

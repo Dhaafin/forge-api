@@ -150,3 +150,92 @@ async def generate_coach_analysis(session_id: UUID, db: Session, user: User) -> 
     db.refresh(new_log)
     
     return new_log
+
+
+async def parse_workout_notes_with_ai(raw_text: str) -> dict:
+    import json
+    
+    if not settings.OPENROUTER_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="AI service configuration error: OpenRouter API key is missing."
+        )
+
+    system_prompt = (
+        "You are an expert workout notes parser for the Forge Gym Platform.\n"
+        "Your task is to parse a raw text workout note and extract the workout details into a clean, structured JSON format.\n"
+        "Ignore supersets or treat them as separate exercises (do not try to nest them under each other).\n\n"
+        "You MUST return ONLY a valid JSON object matching this schema:\n"
+        "{\n"
+        "  \"title\": \"Name of the workout session/day (e.g., Pull Day, Push Day)\",\n"
+        "  \"date\": \"The date of the session formatted as YYYY-MM-DD if found, otherwise null\",\n"
+        "  \"exercises\": [\n"
+        "    {\n"
+        "      \"raw_name\": \"Original exercise name (e.g. Lat Pulldowns)\",\n"
+        "      \"inferred_target_muscle\": \"The main muscle targeted (e.g. Lats, Chest, Quads, Biceps, Triceps, Shoulders, Back, Hamstrings, Calves, Abs)\",\n"
+        "      \"sets\": [\n"
+        "        {\n"
+        "          \"set_number\": 1,\n"
+        "          \"weight_kg\": 30.0,\n"
+        "          \"reps\": 12,\n"
+        "          \"set_type\": \"normal\"\n"
+        "        }\n"
+        "      ]\n"
+        "    }\n"
+        "  ]\n"
+        "}\n\n"
+        "Rules:\n"
+        "- For weight like '2/3kg', choose the higher value (e.g., 3.0).\n"
+        "- For weight like '30kg', use 30.0. Weight must be a float.\n"
+        "- If no weight is provided, default to 0.0.\n"
+        "- Reps must be an integer.\n"
+        "- If a line has multiple exercises (e.g. superset), split them into separate exercise objects.\n"
+        "- Return ONLY the JSON object, no Markdown backticks, no other text."
+    )
+
+    headers = {
+        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://forge.gym",
+        "X-Title": "Forge Gym API"
+    }
+    
+    payload = {
+        "model": settings.OPENROUTER_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Parse the following workout notes:\n\n{raw_text}"}
+        ],
+        "response_format": {"type": "json_object"}
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers=headers,
+                json=payload
+            )
+            
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"OpenRouter API error: {response.text}"
+                )
+                
+            data = response.json()
+            ai_message = data["choices"][0]["message"]["content"]
+            
+            parsed_data = json.loads(ai_message)
+            return parsed_data
+            
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_542_GATEWAY_TIMEOUT if hasattr(status, "HTTP_542_GATEWAY_TIMEOUT") else status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=f"Network error communicating with AI service provider: {str(exc)}"
+        )
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to parse AI response as JSON: {str(exc)}"
+        )
