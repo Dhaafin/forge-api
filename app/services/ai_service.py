@@ -8,6 +8,8 @@ from app.models.workout_set import WorkoutSet
 from app.models.ai_coach_log import AICoachLog
 from app.models.user import User
 from app.models.exercise_guide import ExerciseGuide
+from app.models.chat_session import AIChatSession
+from app.models.chat_message import AIChatMessage
 
 async def generate_coach_analysis(session_id: UUID, db: Session, user: User) -> AICoachLog:
     # 1. Cache Check
@@ -293,26 +295,196 @@ def retrieve_relevant_guides(db: Session, query_embedding: list[float], limit: i
     return result.scalars().all()
 
 
-async def generate_rag_stream_response(query: str, db: Session, user: User):
-    # 1. Generate query embedding
+async def generate_chat_session_title(first_message: str) -> str:
+    if not settings.OPENROUTER_API_KEY:
+        return "Gym Session"
+
+    headers = {
+        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://forge.gym",
+        "X-Title": "Forge Gym API"
+    }
+
+    system_prompt = (
+        "You are a helpful assistant. Generate a short, concise, and professional title "
+        "(max 4 words, strictly in English) for a chat session based on the user's first message. "
+        "Do not include any quotes, punctuation, or extra text. Just return the title."
+    )
+
+    payload = {
+        "model": settings.OPENROUTER_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": first_message}
+        ]
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers=headers,
+                json=payload
+            )
+            if response.status_code == 200:
+                data = response.json()
+                title = data["choices"][0]["message"]["content"].strip().replace('"', '')
+                return title
+    except Exception:
+        pass
+    return "Gym Session"
+
+
+async def summarize_older_chat_history(messages_to_summarize: list) -> str:
+    if not settings.OPENROUTER_API_KEY or not messages_to_summarize:
+        return ""
+
+    headers = {
+        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://forge.gym",
+        "X-Title": "Forge Gym API"
+    }
+
+    conversation_text = ""
+    for m in messages_to_summarize:
+        role = "User" if m.sender == "user" else "Coach"
+        conversation_text += f"{role}: {m.content}\n"
+
+    system_prompt = (
+        "You are an expert fitness assistant. Summarize the following conversation history "
+        "briefly in 1-2 paragraphs (strictly in English). Focus on what the user wants, "
+        "their fitness goals, or any exercises mentioned. Keep it concise."
+    )
+
+    payload = {
+        "model": settings.OPENROUTER_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": conversation_text}
+        ]
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers=headers,
+                json=payload
+            )
+            if response.status_code == 200:
+                data = response.json()
+                return data["choices"][0]["message"]["content"].strip()
+    except Exception:
+        pass
+    return ""
+
+
+def compile_user_profile_context(db: Session, user: User) -> str:
+    recent_workouts = (
+        db.query(WorkoutSession)
+        .filter(WorkoutSession.user_id == user.id)
+        .order_by(WorkoutSession.start_time.desc())
+        .limit(3)
+        .all()
+    )
+    
+    workout_summary = []
+    for ws in recent_workouts:
+        exercises = set(s.exercise.name for s in ws.sets if s.exercise)
+        exercises_str = ", ".join(exercises) if exercises else "No exercises logged"
+        date_str = ws.start_time.strftime("%Y-%m-%d")
+        workout_summary.append(f"- {ws.title or 'Workout'} on {date_str} ({ws.duration_minutes or 0} min): {exercises_str}")
+        
+    workout_history_str = "\n".join(workout_summary) if workout_summary else "No workouts logged yet."
+    
+    profile_context = (
+        f"User Profile:\n"
+        f"- Name: {user.name}\n"
+        f"- Registered on: {user.created_at.strftime('%Y-%m-%d')}\n"
+        f"- Recent Workout History:\n{workout_history_str}\n"
+    )
+    return profile_context
+
+
+async def generate_rag_stream_response(query: str, db: Session, user: User, session_id: UUID):
+    # 1. Fetch Chat Session and verify ownership
+    chat_session = db.query(AIChatSession).filter(
+        AIChatSession.id == session_id,
+        AIChatSession.user_id == user.id
+    ).first()
+    
+    if not chat_session:
+        yield "Error: Chat session not found or unauthorized."
+        return
+
+    # 2. Save User Message to Database
+    user_msg = AIChatMessage(
+        session_id=session_id,
+        sender="user",
+        content=query
+    )
+    db.add(user_msg)
+    db.commit()
+
+    # 3. If this is the first message in the session, generate a title using LLM
+    first_msg_check = db.query(AIChatMessage).filter(AIChatMessage.session_id == session_id).count()
+    if first_msg_check == 1:
+        new_title = await generate_chat_session_title(query)
+        chat_session.title = new_title
+        db.commit()
+
+    # 4. Generate query embedding
     query_embedding = await get_embedding(query)
 
-    # 2. Retrieve top matching guides
+    # 5. Retrieve top matching guides
     guides = retrieve_relevant_guides(db, query_embedding, limit=3)
 
-    # 3. Construct Context and Prompt
+    # 6. Construct Context blocks
     context_blocks = []
     for g in guides:
         context_blocks.append(f"Exercise: {g.exercise_name}\nTarget Muscle: {g.target_muscle}\nDescription: {g.description}")
     context_str = "\n\n---\n\n".join(context_blocks)
 
+    # 7. Compile dynamic user profile context
+    user_profile_context = compile_user_profile_context(db, user)
+
+    # 8. Load past chat messages
+    past_messages = (
+        db.query(AIChatMessage)
+        .filter(AIChatMessage.session_id == session_id)
+        .order_by(AIChatMessage.created_at.asc())
+        .all()
+    )
+
+    # Separate messages into older (to summarize) and newer (to pass as chat history)
+    recent_messages = past_messages[-6:]
+    older_messages = past_messages[:-6]
+
+    older_summary_str = ""
+    if older_messages:
+        older_summary_str = await summarize_older_chat_history(older_messages)
+
+    # 9. Build Prompt
     system_prompt = (
         "You are an expert personal AI Gym Coach for the Forge Gym Tracker Platform.\n"
         "Answer the user's questions about exercises, fitness, or workouts using ONLY the provided exercise guides context.\n"
         "If the answer cannot be found or inferred from the context, state politely that you do not know the answer and focus only on what is verified.\n"
         "Keep your response concise, athletic, friendly, and encouraging. Write strictly in English.\n\n"
-        f"Exercise Guides Context:\n{context_str}"
+        f"Exercise Guides Context:\n{context_str}\n\n"
+        f"{user_profile_context}\n"
     )
+    if older_summary_str:
+        system_prompt += f"\nSummary of older conversation:\n{older_summary_str}\n"
+
+    api_messages = [{"role": "system", "content": system_prompt}]
+    
+    for m in recent_messages[:-1]:
+        role = "user" if m.sender == "user" else "assistant"
+        api_messages.append({"role": role, "content": m.content})
+        
+    api_messages.append({"role": "user", "content": query})
 
     headers = {
         "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
@@ -323,12 +495,11 @@ async def generate_rag_stream_response(query: str, db: Session, user: User):
 
     payload = {
         "model": settings.OPENROUTER_MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": query}
-        ],
+        "messages": api_messages,
         "stream": True
     }
+
+    full_ai_response = []
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -353,9 +524,23 @@ async def generate_rag_stream_response(query: str, db: Session, user: User):
                             chunk = json.loads(data_str)
                             text = chunk["choices"][0]["delta"].get("content", "")
                             if text:
+                                full_ai_response.append(text)
                                 yield text
                         except Exception:
                             pass
+                            
+        # 10. Save AI Response to Database
+        ai_response_text = "".join(full_ai_response)
+        if ai_response_text:
+            ai_msg = AIChatMessage(
+                session_id=session_id,
+                sender="ai",
+                content=ai_response_text
+            )
+            db.add(ai_msg)
+            db.commit()
+
     except httpx.RequestError as exc:
         yield f"Network error communicating with AI provider: {str(exc)}"
+
 

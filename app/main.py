@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 import secrets
 
 from app.core.scheduler import scheduler, start_scheduler
-from app.api.v1.endpoints import auth, workouts, ai_coach
+from app.api.v1.endpoints import auth, workouts, ai_coach, chat
 
 security = HTTPBasic()
 
@@ -40,6 +40,7 @@ app = FastAPI(
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
 app.include_router(workouts.router, prefix="/api/v1/workouts", tags=["Workouts Core"])
 app.include_router(ai_coach.router, prefix="/api/v1/ai", tags=["AI Coach"])
+app.include_router(chat.router, prefix="/api/v1/ai/chat", tags=["AI Chat History"])
 
 @app.get("/", dependencies=[Depends(verify_credentials)])
 def read_root():

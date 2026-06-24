@@ -25,3 +25,23 @@ class AICoachResponse(BaseModel):
 class AIChatRequest(BaseModel):
     message: str = Field(..., description="The user's query/chat message to the AI coach")
 
+
+class AIChatMessageResponse(BaseModel):
+    id: UUID
+    session_id: UUID
+    sender: str
+    content: str
+    created_at: datetime
+
+    model_config = common_config
+
+
+class AIChatSessionResponse(BaseModel):
+    id: UUID
+    user_id: UUID
+    title: str
+    created_at: datetime
+
+    model_config = common_config
+
+

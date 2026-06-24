@@ -5,3 +5,5 @@ from app.models.workout_session import WorkoutSession
 from app.models.workout_set import WorkoutSet
 from app.models.ai_coach_log import AICoachLog
 from app.models.exercise_guide import ExerciseGuide
+from app.models.chat_session import AIChatSession
+from app.models.chat_message import AIChatMessage
