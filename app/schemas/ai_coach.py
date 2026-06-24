@@ -20,3 +20,8 @@ class AICoachResponse(BaseModel):
     created_at: datetime
 
     model_config = common_config
+
+
+class AIChatRequest(BaseModel):
+    message: str = Field(..., description="The user's query/chat message to the AI coach")
+

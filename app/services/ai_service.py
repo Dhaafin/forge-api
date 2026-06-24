@@ -7,6 +7,7 @@ from app.models.workout_session import WorkoutSession
 from app.models.workout_set import WorkoutSet
 from app.models.ai_coach_log import AICoachLog
 from app.models.user import User
+from app.models.exercise_guide import ExerciseGuide
 
 async def generate_coach_analysis(session_id: UUID, db: Session, user: User) -> AICoachLog:
     # 1. Cache Check
@@ -239,3 +240,122 @@ async def parse_workout_notes_with_ai(raw_text: str) -> dict:
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to parse AI response as JSON: {str(exc)}"
         )
+
+
+async def get_embedding(text: str) -> list[float]:
+    if not settings.OPENROUTER_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="AI service configuration error: OpenRouter API key is missing."
+        )
+
+    headers = {
+        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://forge.gym",
+        "X-Title": "Forge Gym API"
+    }
+
+    payload = {
+        "model": "openai/text-embedding-3-small",
+        "input": text
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/embeddings",
+                headers=headers,
+                json=payload
+            )
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"OpenRouter Embeddings API error: {response.text}"
+                )
+            data = response.json()
+            return data["data"][0]["embedding"]
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=f"Network error communicating with AI embeddings provider: {str(exc)}"
+        )
+
+
+def retrieve_relevant_guides(db: Session, query_embedding: list[float], limit: int = 3) -> list[ExerciseGuide]:
+    from sqlalchemy import select
+    stmt = (
+        select(ExerciseGuide)
+        .order_by(ExerciseGuide.embedding.cosine_distance(query_embedding))
+        .limit(limit)
+    )
+    result = db.execute(stmt)
+    return result.scalars().all()
+
+
+async def generate_rag_stream_response(query: str, db: Session, user: User):
+    # 1. Generate query embedding
+    query_embedding = await get_embedding(query)
+
+    # 2. Retrieve top matching guides
+    guides = retrieve_relevant_guides(db, query_embedding, limit=3)
+
+    # 3. Construct Context and Prompt
+    context_blocks = []
+    for g in guides:
+        context_blocks.append(f"Exercise: {g.exercise_name}\nTarget Muscle: {g.target_muscle}\nDescription: {g.description}")
+    context_str = "\n\n---\n\n".join(context_blocks)
+
+    system_prompt = (
+        "You are an expert personal AI Gym Coach for the Forge Gym Tracker Platform.\n"
+        "Answer the user's questions about exercises, fitness, or workouts using ONLY the provided exercise guides context.\n"
+        "If the answer cannot be found or inferred from the context, state politely that you do not know the answer and focus only on what is verified.\n"
+        "Keep your response concise, athletic, friendly, and encouraging. Write strictly in English.\n\n"
+        f"Exercise Guides Context:\n{context_str}"
+    )
+
+    headers = {
+        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://forge.gym",
+        "X-Title": "Forge Gym API"
+    }
+
+    payload = {
+        "model": settings.OPENROUTER_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": query}
+        ],
+        "stream": True
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            async with client.stream(
+                "POST",
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers=headers,
+                json=payload
+            ) as response:
+                if response.status_code != 200:
+                    error_body = await response.aread()
+                    yield f"Error calling AI service: {error_body.decode()}"
+                    return
+
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        data_str = line[6:].strip()
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            import json
+                            chunk = json.loads(data_str)
+                            text = chunk["choices"][0]["delta"].get("content", "")
+                            if text:
+                                yield text
+                        except Exception:
+                            pass
+    except httpx.RequestError as exc:
+        yield f"Network error communicating with AI provider: {str(exc)}"
+
