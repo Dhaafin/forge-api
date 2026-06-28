@@ -30,10 +30,10 @@ async def generate_coach_analysis(session_id: UUID, db: Session, user: User) -> 
         )
 
     # 3. Check API Key
-    if not settings.OPENROUTER_API_KEY:
+    if not settings.AI_API_KEY:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="AI Coach service configuration error: OpenRouter API key is missing."
+            detail="AI Coach service configuration error: AI API key is missing."
         )
 
     # 4. Compile Session Stats & Format Data
@@ -95,16 +95,16 @@ async def generate_coach_analysis(session_id: UUID, db: Session, user: User) -> 
         f"Exercise Log Details:\n{exercises_block}"
     )
 
-    # 6. Call OpenRouter API
+    # 6. Call AI API
     headers = {
-        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {settings.AI_API_KEY}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://forge.gym",  # Optional
         "X-Title": "Forge Gym API"           # Optional
     }
     
     payload = {
-        "model": settings.OPENROUTER_MODEL,
+        "model": settings.AI_MODEL,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
@@ -114,7 +114,7 @@ async def generate_coach_analysis(session_id: UUID, db: Session, user: User) -> 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
+                f"{settings.AI_BASE_URL}/chat/completions",
                 headers=headers,
                 json=payload
             )
@@ -122,7 +122,7 @@ async def generate_coach_analysis(session_id: UUID, db: Session, user: User) -> 
             if response.status_code != 200:
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"OpenRouter API error: {response.text}"
+                    detail=f"AI provider API error: {response.text}"
                 )
                 
             data = response.json()
@@ -143,7 +143,7 @@ async def generate_coach_analysis(session_id: UUID, db: Session, user: User) -> 
         session_id=session_id,
         prompt=user_prompt,
         response=ai_message,
-        model_used=settings.OPENROUTER_MODEL,
+        model_used=settings.AI_MODEL,
         tokens_prompt=tokens_prompt,
         tokens_completion=tokens_completion
     )
@@ -158,10 +158,10 @@ async def generate_coach_analysis(session_id: UUID, db: Session, user: User) -> 
 async def parse_workout_notes_with_ai(raw_text: str) -> dict:
     import json
     
-    if not settings.OPENROUTER_API_KEY:
+    if not settings.AI_API_KEY:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="AI service configuration error: OpenRouter API key is missing."
+            detail="AI service configuration error: AI API key is missing."
         )
 
     system_prompt = (
@@ -197,14 +197,14 @@ async def parse_workout_notes_with_ai(raw_text: str) -> dict:
     )
 
     headers = {
-        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {settings.AI_API_KEY}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://forge.gym",
         "X-Title": "Forge Gym API"
     }
     
     payload = {
-        "model": settings.OPENROUTER_MODEL,
+        "model": settings.AI_MODEL,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Parse the following workout notes:\n\n{raw_text}"}
@@ -215,7 +215,7 @@ async def parse_workout_notes_with_ai(raw_text: str) -> dict:
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
+                f"{settings.AI_BASE_URL}/chat/completions",
                 headers=headers,
                 json=payload
             )
@@ -223,7 +223,7 @@ async def parse_workout_notes_with_ai(raw_text: str) -> dict:
             if response.status_code != 200:
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"OpenRouter API error: {response.text}"
+                    detail=f"AI provider API error: {response.text}"
                 )
                 
             data = response.json()
@@ -245,35 +245,35 @@ async def parse_workout_notes_with_ai(raw_text: str) -> dict:
 
 
 async def get_embedding(text: str) -> list[float]:
-    if not settings.OPENROUTER_API_KEY:
+    if not settings.AI_API_KEY:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="AI service configuration error: OpenRouter API key is missing."
+            detail="AI service configuration error: AI API key is missing."
         )
 
     headers = {
-        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {settings.AI_API_KEY}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://forge.gym",
         "X-Title": "Forge Gym API"
     }
 
     payload = {
-        "model": "openai/text-embedding-3-small",
+        "model": settings.AI_EMBEDDING_MODEL,
         "input": text
     }
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                "https://openrouter.ai/api/v1/embeddings",
+                f"{settings.AI_BASE_URL}/embeddings",
                 headers=headers,
                 json=payload
             )
             if response.status_code != 200:
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"OpenRouter Embeddings API error: {response.text}"
+                    detail=f"AI Embeddings provider API error: {response.text}"
                 )
             data = response.json()
             return data["data"][0]["embedding"]
@@ -296,11 +296,11 @@ def retrieve_relevant_guides(db: Session, query_embedding: list[float], limit: i
 
 
 async def generate_chat_session_title(first_message: str) -> str:
-    if not settings.OPENROUTER_API_KEY:
+    if not settings.AI_API_KEY:
         return "Gym Session"
 
     headers = {
-        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {settings.AI_API_KEY}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://forge.gym",
         "X-Title": "Forge Gym API"
@@ -313,7 +313,7 @@ async def generate_chat_session_title(first_message: str) -> str:
     )
 
     payload = {
-        "model": settings.OPENROUTER_MODEL,
+        "model": settings.AI_MODEL,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": first_message}
@@ -323,7 +323,7 @@ async def generate_chat_session_title(first_message: str) -> str:
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
+                f"{settings.AI_BASE_URL}/chat/completions",
                 headers=headers,
                 json=payload
             )
@@ -337,11 +337,11 @@ async def generate_chat_session_title(first_message: str) -> str:
 
 
 async def summarize_older_chat_history(messages_to_summarize: list) -> str:
-    if not settings.OPENROUTER_API_KEY or not messages_to_summarize:
+    if not settings.AI_API_KEY or not messages_to_summarize:
         return ""
 
     headers = {
-        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {settings.AI_API_KEY}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://forge.gym",
         "X-Title": "Forge Gym API"
@@ -359,7 +359,7 @@ async def summarize_older_chat_history(messages_to_summarize: list) -> str:
     )
 
     payload = {
-        "model": settings.OPENROUTER_MODEL,
+        "model": settings.AI_MODEL,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": conversation_text}
@@ -487,14 +487,14 @@ async def generate_rag_stream_response(query: str, db: Session, user: User, sess
     api_messages.append({"role": "user", "content": query})
 
     headers = {
-        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {settings.AI_API_KEY}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://forge.gym",
         "X-Title": "Forge Gym API"
     }
 
     payload = {
-        "model": settings.OPENROUTER_MODEL,
+        "model": settings.AI_MODEL,
         "messages": api_messages,
         "stream": True
     }
@@ -505,7 +505,7 @@ async def generate_rag_stream_response(query: str, db: Session, user: User, sess
         async with httpx.AsyncClient(timeout=30.0) as client:
             async with client.stream(
                 "POST",
-                "https://openrouter.ai/api/v1/chat/completions",
+                f"{settings.AI_BASE_URL}/chat/completions",
                 headers=headers,
                 json=payload
             ) as response:

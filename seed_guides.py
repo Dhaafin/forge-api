@@ -6,20 +6,20 @@ from app.models.exercise_guide import ExerciseGuide
 from app.core.config import settings
 
 def get_embedding_sync(text: str) -> list[float]:
-    if not settings.OPENROUTER_API_KEY:
-        raise Exception("OPENROUTER_API_KEY is not configured in environment.")
+    if not settings.AI_API_KEY:
+        raise Exception("AI_API_KEY is not configured in environment.")
 
     headers = {
-        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {settings.AI_API_KEY}",
         "Content-Type": "application/json",
     }
     payload = {
-        "model": "openai/text-embedding-3-small",
+        "model": settings.AI_EMBEDDING_MODEL,
         "input": text
     }
     with httpx.Client(timeout=30.0) as client:
         response = client.post(
-            "https://openrouter.ai/api/v1/embeddings",
+            f"{settings.AI_BASE_URL}/embeddings",
             headers=headers,
             json=payload
         )
