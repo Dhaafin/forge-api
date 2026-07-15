@@ -1,4 +1,6 @@
 import bcrypt
+import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Union
 from jose import jwt
@@ -28,3 +30,12 @@ def create_access_token(subject: Union[str, Any], expires_delta: timedelta = Non
     to_encode = {"exp": expire, "sub": str(subject)}
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
+
+def create_refresh_token() -> str:
+    """Generate a cryptographically secure random refresh token string."""
+    return secrets.token_urlsafe(48)
+
+def hash_refresh_token(token: str) -> str:
+    """Hash a refresh token for safe storage (SHA-256, not bcrypt —
+    this is a lookup key, not a password)."""
+    return hashlib.sha256(token.encode()).hexdigest()
