@@ -189,3 +189,16 @@ def refresh_access_token(obj_in: RefreshRequest, db: Session = Depends(get_db)):
         "refresh_token": new_raw_refresh_token,
         "token_type": "bearer",
     }
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(obj_in: RefreshRequest, db: Session = Depends(get_db)):
+    """Revoke a refresh token, effectively logging out that session."""
+    token_hash = hash_refresh_token(obj_in.refresh_token)
+    db_token = db.query(RefreshToken).filter(
+        RefreshToken.token_hash == token_hash
+    ).first()
+    if db_token:
+        db_token.revoked_at = datetime.utcnow()
+        db.commit()
+    return
