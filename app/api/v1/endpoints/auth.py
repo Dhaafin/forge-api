@@ -6,9 +6,11 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import get_password_hash, verify_password, create_access_token
+from app.core.config import settings
+from app.core.security import get_password_hash, verify_password, create_access_token, create_refresh_token, hash_refresh_token
 from app.models.user import User
 from app.models.invite import InviteToken
+from app.models.refresh_token import RefreshToken
 from app.schemas.auth import InviteCreate, InviteResponse, UserRegister, Token
 
 router = APIRouter()
@@ -129,7 +131,18 @@ def login_for_access_token(
     # 3. Generate secure JSON Web Token payload containing User ID UUID
     access_token = create_access_token(subject=user.id)
     
+    raw_refresh_token = create_refresh_token()
+    expire_time = datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    db_refresh = RefreshToken(
+        user_id=user.id,
+        token_hash=hash_refresh_token(raw_refresh_token),
+        expires_at=expire_time,
+    )
+    db.add(db_refresh)
+    db.commit()
+    
     return {
         "access_token": access_token,
-        "token_type": "bearer"
+        "refresh_token": raw_refresh_token,
+        "token_type": "bearer",
     }
