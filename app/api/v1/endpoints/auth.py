@@ -11,7 +11,7 @@ from app.core.security import get_password_hash, verify_password, create_access_
 from app.models.user import User
 from app.models.invite import InviteToken
 from app.models.refresh_token import RefreshToken
-from app.schemas.auth import InviteCreate, InviteResponse, UserRegister, Token
+from app.schemas.auth import InviteCreate, InviteResponse, UserRegister, Token, RefreshRequest
 
 router = APIRouter()
 
@@ -144,5 +144,48 @@ def login_for_access_token(
     return {
         "access_token": access_token,
         "refresh_token": raw_refresh_token,
+        "token_type": "bearer",
+    }
+
+
+@router.post("/refresh", response_model=Token)
+def refresh_access_token(obj_in: RefreshRequest, db: Session = Depends(get_db)):
+    """
+    Exchange a valid refresh token for a new access token.
+    Implements token rotation: old refresh token is revoked and a new
+    one is issued on every successful refresh.
+    """
+    token_hash = hash_refresh_token(obj_in.refresh_token)
+    db_token = db.query(RefreshToken).filter(
+        RefreshToken.token_hash == token_hash,
+        RefreshToken.revoked_at.is_(None),
+    ).first()
+
+    if not db_token or db_token.expires_at < datetime.utcnow():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token invalid or expired. Please log in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Rotate: revoke old token, issue new pair
+    db_token.revoked_at = datetime.utcnow()
+
+    user = db.query(User).filter(User.id == db_token.user_id).first()
+    new_access_token = create_access_token(subject=user.id)
+    new_raw_refresh_token = create_refresh_token()
+    new_expire_time = datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+
+    new_db_refresh = RefreshToken(
+        user_id=user.id,
+        token_hash=hash_refresh_token(new_raw_refresh_token),
+        expires_at=new_expire_time,
+    )
+    db.add(new_db_refresh)
+    db.commit()
+
+    return {
+        "access_token": new_access_token,
+        "refresh_token": new_raw_refresh_token,
         "token_type": "bearer",
     }
