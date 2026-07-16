@@ -369,7 +369,7 @@ async def summarize_older_chat_history(messages_to_summarize: list) -> str:
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
+                f"{settings.AI_BASE_URL}/chat/completions",
                 headers=headers,
                 json=payload
             )
