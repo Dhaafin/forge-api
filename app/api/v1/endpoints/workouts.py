@@ -14,7 +14,7 @@ from app.models.workout_set import WorkoutSet
 from app.schemas.workout import (
     WorkoutSessionCreate, WorkoutSessionResponse, ExerciseResponse, ExerciseCreate,
     WorkoutSetResponse, WorkoutParseRequest, WorkoutParseResponse, WorkoutParseExerciseItem,
-    WorkoutParseSet, SuggestedExercise
+    WorkoutParseSet, SuggestedExercise, TargetMuscle
 )
 from app.services.ai_service import parse_workout_notes_with_ai
 import difflib
@@ -83,7 +83,7 @@ def create_new_exercise(obj_in: ExerciseCreate, db: Session = Depends(get_db), c
     return db_exercise
 
 @router.put("/exercises/{exercise_id}", response_model=ExerciseResponse)
-def update_exercise_metadata(exercise_id: str, name: str, target_muscle: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def update_exercise_metadata(exercise_id: str, name: str, target_muscle: TargetMuscle, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Modify metadata specifications (name or target muscle) of a specific gym movement entry.
     """
@@ -439,6 +439,14 @@ async def parse_workout_notes_endpoint(
                 )
             )
 
+        inferred_val = item.get("inferred_target_muscle")
+        inferred_enum = None
+        if inferred_val:
+            for m in TargetMuscle:
+                if m.value.lower() == inferred_val.lower().strip():
+                    inferred_enum = m
+                    break
+
         response_exercises.append(
             WorkoutParseExerciseItem(
                 raw_name=raw_name,
@@ -446,7 +454,7 @@ async def parse_workout_notes_endpoint(
                 exercise_id=exercise_id,
                 exercise_name=exercise_name,
                 suggested_exercise=suggested_exercise,
-                inferred_target_muscle=item.get("inferred_target_muscle"),
+                inferred_target_muscle=inferred_enum,
                 sets=sets_list
             )
         )

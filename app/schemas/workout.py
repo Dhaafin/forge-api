@@ -1,3 +1,4 @@
+from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict, field_serializer
 from typing import List, Optional
 from uuid import UUID
@@ -6,17 +7,27 @@ from datetime import datetime
 # Menggunakan satu standar Config untuk semua class (Pydantic v2)
 common_config = ConfigDict(from_attributes=True, arbitrary_types_allowed=True)
 
+class TargetMuscle(str, Enum):
+    CHEST = "Chest"
+    BACK = "Back"
+    LEGS = "Legs"
+    SHOULDERS = "Shoulders"
+    ARMS = "Arms"
+    CORE = "Core"
+    CARDIO = "Cardio"
+    FULL_BODY = "Full Body"
+
 # 1. Exercise Schemas
 class ExerciseResponse(BaseModel):
     id: UUID  # Gunakan UUID di sini
     name: str
-    target_muscle: str
+    target_muscle: TargetMuscle
 
     model_config = common_config
 
 class ExerciseCreate(BaseModel):
     name: str
-    target_muscle: str
+    target_muscle: TargetMuscle
 
 # 2. Workout Set Schemas
 class WorkoutSetCreate(BaseModel):
@@ -79,7 +90,7 @@ class WorkoutParseSet(BaseModel):
 class SuggestedExercise(BaseModel):
     id: UUID
     name: str
-    target_muscle: str
+    target_muscle: TargetMuscle
 
     model_config = common_config
 
@@ -89,7 +100,7 @@ class WorkoutParseExerciseItem(BaseModel):
     exercise_id: Optional[UUID] = None
     exercise_name: Optional[str] = None
     suggested_exercise: Optional[SuggestedExercise] = None
-    inferred_target_muscle: Optional[str] = None
+    inferred_target_muscle: Optional[TargetMuscle] = None
     sets: List[WorkoutParseSet] = []
 
     model_config = common_config

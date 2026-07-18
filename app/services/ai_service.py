@@ -108,7 +108,8 @@ async def generate_coach_analysis(session_id: UUID, db: Session, user: User) -> 
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
-        ]
+        ],
+        "max_tokens": 1000
     }
 
     try:
@@ -175,7 +176,7 @@ async def parse_workout_notes_with_ai(raw_text: str) -> dict:
         "  \"exercises\": [\n"
         "    {\n"
         "      \"raw_name\": \"Original exercise name (e.g. Lat Pulldowns)\",\n"
-        "      \"inferred_target_muscle\": \"The main muscle targeted (e.g. Lats, Chest, Quads, Biceps, Triceps, Shoulders, Back, Hamstrings, Calves, Abs)\",\n"
+        "      \"inferred_target_muscle\": \"The main muscle targeted (Must be one of: Chest, Back, Legs, Shoulders, Arms, Core, Cardio, Full Body)\",\n"
         "      \"sets\": [\n"
         "        {\n"
         "          \"set_number\": 1,\n"
@@ -209,7 +210,8 @@ async def parse_workout_notes_with_ai(raw_text: str) -> dict:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Parse the following workout notes:\n\n{raw_text}"}
         ],
-        "response_format": {"type": "json_object"}
+        "response_format": {"type": "json_object"},
+        "max_tokens": 1000
     }
 
     try:
@@ -317,7 +319,8 @@ async def generate_chat_session_title(first_message: str) -> str:
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": first_message}
-        ]
+        ],
+        "max_tokens": 50
     }
 
     try:
@@ -363,7 +366,8 @@ async def summarize_older_chat_history(messages_to_summarize: list) -> str:
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": conversation_text}
-        ]
+        ],
+        "max_tokens": 400
     }
 
     try:
@@ -496,7 +500,8 @@ async def generate_rag_stream_response(query: str, db: Session, user: User, sess
     payload = {
         "model": settings.AI_MODEL,
         "messages": api_messages,
-        "stream": True
+        "stream": True,
+        "max_tokens": 1000
     }
 
     full_ai_response = []
