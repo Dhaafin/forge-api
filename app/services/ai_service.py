@@ -403,9 +403,19 @@ def compile_user_profile_context(db: Session, user: User) -> str:
         
     workout_history_str = "\n".join(workout_summary) if workout_summary else "No workouts logged yet."
     
+    # Format optional profile parameters for AI coach personalization
+    weight_str = f"{user.weight_kg} kg" if user.weight_kg else "Not set"
+    height_str = f"{user.height_cm} cm" if user.height_cm else "Not set"
+    
     profile_context = (
         f"User Profile:\n"
         f"- Name: {user.name}\n"
+        f"- Preferred Unit: {user.preferred_unit}\n"
+        f"- Weight: {weight_str}\n"
+        f"- Height: {height_str}\n"
+        f"- Goal: {user.fitness_goal or 'Not set'}\n"
+        f"- Experience Level: {user.experience_level or 'Not set'}\n"
+        f"- Injuries/Limitations: {user.injuries_or_limitations or 'None'}\n"
         f"- Registered on: {user.created_at.strftime('%Y-%m-%d')}\n"
         f"- Recent Workout History:\n{workout_history_str}\n"
     )
