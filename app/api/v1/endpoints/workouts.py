@@ -5,6 +5,7 @@ from typing import List, Optional
 from datetime import datetime, date, timedelta
 from pydantic import BaseModel
 
+from uuid import UUID
 from app.core.database import get_db
 from app.api.deps import get_current_user
 from app.models.user import User
@@ -14,7 +15,8 @@ from app.models.workout_set import WorkoutSet
 from app.schemas.workout import (
     WorkoutSessionCreate, WorkoutSessionResponse, ExerciseResponse, ExerciseCreate,
     WorkoutSetResponse, WorkoutParseRequest, WorkoutParseResponse, WorkoutParseExerciseItem,
-    WorkoutParseSet, SuggestedExercise, TargetMuscle
+    WorkoutParseSet, SuggestedExercise, TargetMuscle, ExerciseHistoryResponse,
+    ExerciseHistorySet, ExerciseSessionHistory
 )
 from app.services.ai_service import parse_workout_notes_with_ai
 import difflib
@@ -464,3 +466,117 @@ async def parse_workout_notes_endpoint(
         date=parsed_json.get("date"),
         exercises=response_exercises
     )
+
+
+@router.get("/exercises/{exercise_id}/history", response_model=ExerciseHistoryResponse)
+def get_exercise_history(
+    exercise_id: UUID,
+    limit: int = Query(15, ge=1, le=50, description="Limit history sessions"),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Fetch the historical performance logs and metrics (PR, volume, estimated 1RM progression)
+    for a specific exercise belonging exclusively to the authenticated user.
+    """
+    # 1. Verify exercise existence
+    exercise = db.query(Exercise).filter(Exercise.id == exercise_id).first()
+    if not exercise:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Exercise not found")
+
+    # 2. Retrieve all workout sets for this user & exercise to compute all-time statistics
+    all_user_sets = db.query(WorkoutSet)\
+        .join(WorkoutSession)\
+        .filter(
+            WorkoutSession.user_id == current_user.id,
+            WorkoutSet.exercise_id == exercise_id
+        ).all()
+
+    if not all_user_sets:
+        return ExerciseHistoryResponse(
+            exercise_id=exercise_id,
+            exercise_name=exercise.name,
+            target_muscle=exercise.target_muscle,
+            all_time_max_weight=0.0,
+            all_time_max_volume=0.0,
+            estimated_1rm=0.0,
+            history=[]
+        )
+
+    # 3. Compute All-Time Stats
+    all_time_max_weight = max(s.weight_kg for s in all_user_sets)
+
+    best_1rm = 0.0
+    for s in all_user_sets:
+        if s.reps > 0:
+            one_rm = s.weight_kg * (1 + s.reps / 30.0) if s.reps > 1 else s.weight_kg
+            if one_rm > best_1rm:
+                best_1rm = one_rm
+
+    volume_per_session = {}
+    for s in all_user_sets:
+        volume_per_session[s.session_id] = volume_per_session.get(s.session_id, 0.0) + (s.weight_kg * s.reps)
+    all_time_max_volume = max(volume_per_session.values()) if volume_per_session else 0.0
+
+    # 4. Fetch Paginated Workout Sessions that contain this exercise
+    sessions_query = db.query(WorkoutSession)\
+        .join(WorkoutSet)\
+        .filter(
+            WorkoutSession.user_id == current_user.id,
+            WorkoutSet.exercise_id == exercise_id
+        )\
+        .group_by(WorkoutSession.id)\
+        .order_by(WorkoutSession.start_time.desc())\
+        .offset(offset)\
+        .limit(limit)\
+        .all()
+
+    history_list = []
+    for sess in sessions_query:
+        # Filter sets belonging to this specific exercise in the current session
+        sets_in_session = [s for s in sess.sets if s.exercise_id == exercise_id]
+        if not sets_in_session:
+            continue
+        
+        # Sort sets by set_number
+        sets_in_session.sort(key=lambda x: x.set_number)
+        
+        # Calculate session-level metrics for this exercise
+        session_volume = sum(s.weight_kg * s.reps for s in sets_in_session)
+        session_max_weight = max(s.weight_kg for s in sets_in_session)
+        session_best_1rm = max(
+            (s.weight_kg * (1 + s.reps / 30.0) if s.reps > 1 else s.weight_kg)
+            for s in sets_in_session
+        )
+
+        history_list.append(
+            ExerciseSessionHistory(
+                session_id=sess.id,
+                session_title=sess.title or "Workout Session",
+                date=sess.start_time,
+                sets=[
+                    ExerciseHistorySet(
+                        id=s.id,
+                        set_number=s.set_number,
+                        weight_kg=s.weight_kg,
+                        reps=s.reps,
+                        set_type=s.set_type,
+                        is_pr=s.is_pr
+                    ) for s in sets_in_session
+                ],
+                session_volume=session_volume,
+                session_max_weight=session_max_weight,
+                session_estimated_1rm=round(session_best_1rm, 2)
+            )
+        )
+
+    return ExerciseHistoryResponse(
+        exercise_id=exercise_id,
+        exercise_name=exercise.name,
+        target_muscle=exercise.target_muscle,
+        all_time_max_weight=all_time_max_weight,
+        all_time_max_volume=all_time_max_volume,
+        estimated_1rm=round(best_1rm, 2),
+        history=history_list
+    )

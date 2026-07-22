@@ -16,6 +16,7 @@ class TargetMuscle(str, Enum):
     CORE = "Core"
     CARDIO = "Cardio"
     FULL_BODY = "Full Body"
+    CALVES = "Calves"
 
 # 1. Exercise Schemas
 class ExerciseResponse(BaseModel):
@@ -111,3 +112,51 @@ class WorkoutParseResponse(BaseModel):
     exercises: List[WorkoutParseExerciseItem] = []
 
     model_config = common_config
+
+
+# 5. Exercise History Schemas
+class ExerciseHistorySet(BaseModel):
+    id: UUID
+    set_number: int
+    weight_kg: float
+    reps: int
+    set_type: str
+    is_pr: bool
+
+    model_config = common_config
+
+
+class ExerciseSessionHistory(BaseModel):
+    session_id: UUID
+    session_title: Optional[str] = None
+    date: datetime
+    sets: List[ExerciseHistorySet]
+    session_volume: float
+    session_max_weight: float
+    session_estimated_1rm: float
+
+    model_config = common_config
+
+    @field_serializer('date')
+    def serialize_dt(self, dt: Optional[datetime]) -> Optional[str]:
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        return dt.astimezone().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class ExerciseHistoryResponse(BaseModel):
+    exercise_id: UUID
+    exercise_name: str
+    target_muscle: TargetMuscle
+    
+    # All-Time Stats
+    all_time_max_weight: float
+    all_time_max_volume: float
+    estimated_1rm: float  # All-time best 1RM
+    
+    # Timeline History
+    history: List[ExerciseSessionHistory]
+
+    model_config = common_config
