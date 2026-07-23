@@ -59,6 +59,21 @@ class WorkoutSessionCreate(BaseModel):
     end_time: Optional[datetime] = Field(default=None, description="Custom end time for retroactive logging")
     sets: List[WorkoutSetCreate] = Field(..., description="Array kumpulan set")
 
+class WorkoutSetUpdate(BaseModel):
+    id: Optional[UUID] = Field(default=None, description="ID set jika mengupdate set yang sudah ada")
+    exercise_id: UUID
+    set_number: int = Field(..., description="Set ke-berapa", example=1)
+    weight_kg: float = Field(..., description="Beban angkatan", example=60.0)
+    reps: int = Field(..., description="Jumlah repetisi", example=10)
+    set_type: str = Field(default="normal", description="Tipe set")
+
+class WorkoutSessionUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, example="Push Day Heavy")
+    duration_minutes: Optional[int] = Field(default=None, description="Duration in minutes")
+    start_time: Optional[datetime] = Field(default=None, description="Custom start time for retroactive logging")
+    end_time: Optional[datetime] = Field(default=None, description="Custom end time for retroactive logging")
+    sets: Optional[List[WorkoutSetUpdate]] = Field(default=None, description="Array kumpulan set untuk sinkronisasi diferensial")
+
 class WorkoutSessionResponse(BaseModel):
     id: UUID
     user_id: UUID

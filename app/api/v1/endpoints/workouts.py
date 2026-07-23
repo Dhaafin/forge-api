@@ -16,10 +16,32 @@ from app.schemas.workout import (
     WorkoutSessionCreate, WorkoutSessionResponse, ExerciseResponse, ExerciseCreate,
     WorkoutSetResponse, WorkoutParseRequest, WorkoutParseResponse, WorkoutParseExerciseItem,
     WorkoutParseSet, SuggestedExercise, TargetMuscle, ExerciseHistoryResponse,
-    ExerciseHistorySet, ExerciseSessionHistory
+    ExerciseHistorySet, ExerciseSessionHistory, WorkoutSessionUpdate, WorkoutSetUpdate
 )
 from app.services.ai_service import parse_workout_notes_with_ai
 import difflib
+
+def recalculate_prs_for_exercise(db: Session, user_id: UUID, exercise_id: UUID):
+    """
+    Recalculates the is_pr flag for all sets of a specific exercise for a user chronologically.
+    """
+    # Fetch all sets of this exercise for this user ordered chronologically by session start_time and set_number
+    sets = db.query(WorkoutSet).\
+        join(WorkoutSession, WorkoutSet.session_id == WorkoutSession.id).\
+        filter(WorkoutSession.user_id == user_id).\
+        filter(WorkoutSet.exercise_id == exercise_id).\
+        order_by(WorkoutSession.start_time.asc(), WorkoutSet.set_number.asc()).\
+        all()
+
+    highest_weight = 0.0
+    for s in sets:
+        is_pr = False
+        if s.weight_kg > highest_weight:
+            is_pr = True
+            highest_weight = s.weight_kg
+        
+        if s.is_pr != is_pr:
+            s.is_pr = is_pr
 
 router = APIRouter()
 
@@ -282,25 +304,109 @@ def record_workout_session(obj_in: WorkoutSessionCreate, db: Session = Depends(g
     return db_session
 
 @router.put("/session/{session_id}", response_model=WorkoutSessionResponse)
-def update_workout_session(session_id: str, title: str = None, duration_minutes: int = None, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def update_workout_session(
+    session_id: UUID,
+    obj_in: WorkoutSessionUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """
-    Allow dynamic updates to session titles or training length logs from the mobile screen.
+    Allow dynamic updates to session titles, training length logs, and differential updates
+    to the exercises and sets belonging to this session.
     """
-    db_session = db.query(WorkoutSession).filter(WorkoutSession.id == session_id, WorkoutSession.user_id == current_user.id).first()
+    db_session = db.query(WorkoutSession).filter(
+        WorkoutSession.id == session_id,
+        WorkoutSession.user_id == current_user.id
+    ).first()
     if not db_session:
         raise HTTPException(status_code=404, detail="Workout log entry not found.")
         
-    if title is not None:
-        db_session.title = title
-    if duration_minutes is not None:
-        db_session.duration_minutes = duration_minutes
-        
+    if obj_in.title is not None:
+        db_session.title = obj_in.title
+    if obj_in.duration_minutes is not None:
+        db_session.duration_minutes = obj_in.duration_minutes
+    if obj_in.start_time is not None:
+        db_session.start_time = obj_in.start_time
+    if obj_in.end_time is not None:
+        db_session.end_time = obj_in.end_time
+
+    exercises_to_recalculate = set()
+
+    if obj_in.sets is not None:
+        # 1. Validate that all incoming exercise IDs exist in the database
+        exercise_ids = {s.exercise_id for s in obj_in.sets}
+        if exercise_ids:
+            existing_exercises = db.query(Exercise.id).filter(Exercise.id.in_(exercise_ids)).all()
+            existing_ids = {e.id for e in existing_exercises}
+            missing_ids = exercise_ids - existing_ids
+            if missing_ids:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Exercise(s) not found: {', '.join(str(m) for m in missing_ids)}"
+                )
+
+        # 2. Get existing sets in this session
+        existing_sets = {s.id: s for s in db_session.sets}
+        incoming_set_ids = set()
+
+        # 3. Process each set in the request
+        for s_in in obj_in.sets:
+            if s_in.id is not None:
+                # Existing set being updated
+                if s_in.id not in existing_sets:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Set with ID {s_in.id} does not belong to this session."
+                    )
+                
+                incoming_set_ids.add(s_in.id)
+                db_set = existing_sets[s_in.id]
+
+                # Check if exercise_id or weight_kg changed to trigger PR recalculation
+                if db_set.exercise_id != s_in.exercise_id:
+                    exercises_to_recalculate.add(db_set.exercise_id)
+                    exercises_to_recalculate.add(s_in.exercise_id)
+                elif db_set.weight_kg != s_in.weight_kg:
+                    exercises_to_recalculate.add(s_in.exercise_id)
+
+                # Update set fields
+                db_set.exercise_id = s_in.exercise_id
+                db_set.set_number = s_in.set_number
+                db_set.weight_kg = s_in.weight_kg
+                db_set.reps = s_in.reps
+                db_set.set_type = s_in.set_type
+            else:
+                # New set to be added
+                db_set = WorkoutSet(
+                    session_id=db_session.id,
+                    exercise_id=s_in.exercise_id,
+                    set_number=s_in.set_number,
+                    weight_kg=s_in.weight_kg,
+                    reps=s_in.reps,
+                    set_type=s_in.set_type
+                )
+                db.add(db_set)
+                exercises_to_recalculate.add(s_in.exercise_id)
+
+        # 4. Delete sets that are not in the incoming payload
+        for set_id, db_set in existing_sets.items():
+            if set_id not in incoming_set_ids:
+                exercises_to_recalculate.add(db_set.exercise_id)
+                db.delete(db_set)
+
+    db.commit()
+    db.refresh(db_session)
+
+    # 5. Recalculate PRs for all affected exercises
+    for exercise_id in exercises_to_recalculate:
+        recalculate_prs_for_exercise(db, current_user.id, exercise_id)
+
     db.commit()
     db.refresh(db_session)
     return db_session
 
 @router.delete("/session/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_workout_session(session_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def delete_workout_session(session_id: UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Cascade-delete an entire faulty log entry along with its child performance metrics parameters.
     """
@@ -308,7 +414,16 @@ def delete_workout_session(session_id: str, db: Session = Depends(get_db), curre
     if not db_session:
         raise HTTPException(status_code=404, detail="Workout log entry not found.")
         
+    # Track which exercise IDs were present in this session
+    exercise_ids = {s.exercise_id for s in db_session.sets}
+
     db.delete(db_session)
+    db.commit()
+
+    # Recalculate PRs for all affected exercises
+    for exercise_id in exercise_ids:
+        recalculate_prs_for_exercise(db, current_user.id, exercise_id)
+        
     db.commit()
     return None
 
@@ -317,7 +432,7 @@ def delete_workout_session(session_id: str, db: Session = Depends(get_db), curre
 # =====================================================================
 
 @router.put("/set/{set_id}", response_model=WorkoutSetResponse)
-def update_workout_set_detail(set_id: str, weight_kg: float = None, reps: int = None, set_type: str = None, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def update_workout_set_detail(set_id: UUID, weight_kg: float = None, reps: int = None, set_type: str = None, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Modify specific metrics (weight, reps, type) of an individual workout set row.
     Automatically recalculates the Personal Record (PR) flag if weight changes.
@@ -330,31 +445,28 @@ def update_workout_set_detail(set_id: str, weight_kg: float = None, reps: int = 
     if not db_set:
         raise HTTPException(status_code=404, detail="Set row not found or unauthorized.")
         
+    weight_changed = False
     if weight_kg is not None:
+        if db_set.weight_kg != weight_kg:
+            weight_changed = True
         db_set.weight_kg = weight_kg
     if reps is not None:
         db_set.reps = reps
     if set_type is not None:
         db_set.set_type = set_type
         
-    # Dynamically re-evaluate PR flag upon weight alteration
-    if weight_kg is not None:
-        highest_past_weight = db.query(WorkoutSet.weight_kg).\
-            join(WorkoutSession).\
-            filter(WorkoutSession.user_id == current_user.id).\
-            filter(WorkoutSet.exercise_id == db_set.exercise_id).\
-            filter(WorkoutSet.id != db_set.id).\
-            order_by(WorkoutSet.weight_kg.desc()).\
-            first()
-            
-        db_set.is_pr = highest_past_weight is None or weight_kg > highest_past_weight[0]
-
     db.commit()
+    
+    # Recalculate PRs if weight changed
+    if weight_changed:
+        recalculate_prs_for_exercise(db, current_user.id, db_set.exercise_id)
+        db.commit()
+        
     db.refresh(db_set)
     return db_set
 
 @router.delete("/set/{set_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_single_workout_set(set_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def delete_single_workout_set(set_id: UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Permanently delete a single set row from a workout log session.
     """
@@ -366,7 +478,12 @@ def delete_single_workout_set(set_id: str, db: Session = Depends(get_db), curren
     if not db_set:
         raise HTTPException(status_code=404, detail="Set row not found or unauthorized.")
         
+    exercise_id = db_set.exercise_id
     db.delete(db_set)
+    db.commit()
+    
+    # Recalculate PRs for this exercise
+    recalculate_prs_for_exercise(db, current_user.id, exercise_id)
     db.commit()
     return None
 
