@@ -321,12 +321,16 @@ def update_workout_session(
     if not db_session:
         raise HTTPException(status_code=404, detail="Workout log entry not found.")
         
+    start_time_changed = False
+    if obj_in.start_time is not None:
+        if db_session.start_time != obj_in.start_time:
+            start_time_changed = True
+        db_session.start_time = obj_in.start_time
+
     if obj_in.title is not None:
         db_session.title = obj_in.title
     if obj_in.duration_minutes is not None:
         db_session.duration_minutes = obj_in.duration_minutes
-    if obj_in.start_time is not None:
-        db_session.start_time = obj_in.start_time
     if obj_in.end_time is not None:
         db_session.end_time = obj_in.end_time
 
@@ -393,6 +397,10 @@ def update_workout_session(
             if set_id not in incoming_set_ids:
                 exercises_to_recalculate.add(db_set.exercise_id)
                 db.delete(db_set)
+
+    if start_time_changed:
+        for db_set in db_session.sets:
+            exercises_to_recalculate.add(db_set.exercise_id)
 
     db.commit()
     db.refresh(db_session)
