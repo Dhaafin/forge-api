@@ -17,6 +17,7 @@ class WorkoutSet(Base):
     
     set_type = Column(String, default="normal")
     is_pr = Column(Boolean, default=False, nullable=False)
+    sequence_order = Column(Integer, nullable=False)
 
     exercise = relationship("Exercise", lazy="joined")
 

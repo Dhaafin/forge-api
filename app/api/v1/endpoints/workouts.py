@@ -25,12 +25,12 @@ def recalculate_prs_for_exercise(db: Session, user_id: UUID, exercise_id: UUID):
     """
     Recalculates the is_pr flag for all sets of a specific exercise for a user chronologically.
     """
-    # Fetch all sets of this exercise for this user ordered chronologically by session start_time and set_number
+    # Fetch all sets of this exercise for this user ordered chronologically by session start_time and sequence_order
     sets = db.query(WorkoutSet).\
         join(WorkoutSession, WorkoutSet.session_id == WorkoutSession.id).\
         filter(WorkoutSession.user_id == user_id).\
         filter(WorkoutSet.exercise_id == exercise_id).\
-        order_by(WorkoutSession.start_time.asc(), WorkoutSet.set_number.asc()).\
+        order_by(WorkoutSession.start_time.asc(), WorkoutSet.sequence_order.asc()).\
         all()
 
     highest_weight = 0.0
@@ -266,7 +266,8 @@ def record_workout_session(obj_in: WorkoutSessionCreate, db: Session = Depends(g
             weight_kg=s.weight_kg,
             reps=s.reps,
             set_type=s.set_type,
-            is_pr=is_new_pr
+            is_pr=is_new_pr,
+            sequence_order=s.sequence_order
         )
         db.add(db_set)
 
@@ -366,11 +367,11 @@ def update_workout_session(
                 incoming_set_ids.add(s_in.id)
                 db_set = existing_sets[s_in.id]
 
-                # Check if exercise_id or weight_kg changed to trigger PR recalculation
+                # Check if exercise_id or weight_kg or sequence_order changed to trigger PR recalculation
                 if db_set.exercise_id != s_in.exercise_id:
                     exercises_to_recalculate.add(db_set.exercise_id)
                     exercises_to_recalculate.add(s_in.exercise_id)
-                elif db_set.weight_kg != s_in.weight_kg:
+                elif db_set.weight_kg != s_in.weight_kg or db_set.sequence_order != s_in.sequence_order:
                     exercises_to_recalculate.add(s_in.exercise_id)
 
                 # Update set fields
@@ -379,6 +380,7 @@ def update_workout_session(
                 db_set.weight_kg = s_in.weight_kg
                 db_set.reps = s_in.reps
                 db_set.set_type = s_in.set_type
+                db_set.sequence_order = s_in.sequence_order
             else:
                 # New set to be added
                 db_set = WorkoutSet(
@@ -387,7 +389,8 @@ def update_workout_session(
                     set_number=s_in.set_number,
                     weight_kg=s_in.weight_kg,
                     reps=s_in.reps,
-                    set_type=s_in.set_type
+                    set_type=s_in.set_type,
+                    sequence_order=s_in.sequence_order
                 )
                 db.add(db_set)
                 exercises_to_recalculate.add(s_in.exercise_id)
@@ -664,8 +667,8 @@ def get_exercise_history(
         if not sets_in_session:
             continue
         
-        # Sort sets by set_number
-        sets_in_session.sort(key=lambda x: x.set_number)
+        # Sort sets by sequence_order
+        sets_in_session.sort(key=lambda x: x.sequence_order)
         
         # Calculate session-level metrics for this exercise
         session_volume = sum(s.weight_kg * s.reps for s in sets_in_session)

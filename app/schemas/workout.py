@@ -37,6 +37,7 @@ class WorkoutSetCreate(BaseModel):
     weight_kg: float = Field(..., description="Beban angkatan", example=60.0)
     reps: int = Field(..., description="Jumlah repetisi", example=10)
     set_type: str = Field(default="normal", description="Tipe set")
+    sequence_order: int = Field(..., description="Urutan pengerjaan set", example=0)
 
 class WorkoutSetResponse(BaseModel):
     id: UUID
@@ -48,6 +49,7 @@ class WorkoutSetResponse(BaseModel):
     reps: int
     set_type: str
     is_pr: bool 
+    sequence_order: int
 
     model_config = common_config
 
@@ -66,6 +68,7 @@ class WorkoutSetUpdate(BaseModel):
     weight_kg: float = Field(..., description="Beban angkatan", example=60.0)
     reps: int = Field(..., description="Jumlah repetisi", example=10)
     set_type: str = Field(default="normal", description="Tipe set")
+    sequence_order: int = Field(..., description="Urutan pengerjaan set", example=0)
 
 class WorkoutSessionUpdate(BaseModel):
     title: Optional[str] = Field(default=None, example="Push Day Heavy")

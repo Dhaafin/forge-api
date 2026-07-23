@@ -15,4 +15,4 @@ class WorkoutSession(Base):
     end_time = Column(DateTime, nullable=True)
     duration_minutes = Column(Integer, nullable=True)
     
-    sets = relationship("WorkoutSet", backref="session", cascade="all, delete-orphan", lazy="joined")
+    sets = relationship("WorkoutSet", backref="session", cascade="all, delete-orphan", lazy="joined", order_by="WorkoutSet.sequence_order.asc()")
